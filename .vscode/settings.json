@@ -1,0 +1,52 @@
+{
+    "go.toolsManagement.autoUpdate": true,
+    "go.useLanguageServer": true,
+    "go.buildOnSave": "off",
+    "go.lintOnSave": "workspace",
+    "go.vetOnSave": "workspace",
+    "go.buildFlags": ["-mod=vendor"],
+    "go.testFlags": ["-v"],
+    "go.coverOnSave": false,
+    "go.alternateTools": {
+        "dlv": "dlv"
+    },
+    "gopls": {
+        "build.directoryFilters": ["-vendor"],
+        "build.buildFlags": ["-mod=vendor"],
+        "ui.semanticTokens": true,
+        "ui.diagnostic.staticcheck": false,
+        "ui.diagnostic.analyses": {
+            "composites": false,
+            "unusedparams": false
+        }
+    },
+    "[go]": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    },
+    "search.exclude": {
+        "**/vendor": true,
+        // other exclusions might be here by default or added by you
+        "**/node_modules": true,
+        "**/bower_components": true
+    },
+    "terminal.integrated.defaultProfile.windows": "wsl-bash",
+    "terminal.integrated.profiles.windows": {
+        "wsl-bash": {
+            "path": "wsl.exe",
+            "args": ["-d", "Ubuntu", "--", "bash", "-l"],
+            "icon": "terminal-ubuntu"
+        }
+    },
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.profiles.linux": {
+        "bash": {
+            "path": "bash",
+            "args": ["-l"],
+            "icon": "terminal-bash"
+        }
+    },
+    "makefile.configureOnOpen": false,
+}
