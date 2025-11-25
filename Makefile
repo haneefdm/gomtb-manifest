@@ -2,7 +2,7 @@
 .PHONY: help clean install dev debug watch watch-air watch-nodemon quality-check test build-all check-deps vendor
 
 # Build variables
-DOVENDOR=false
+DOVENDOR=true
 BINARY_NAME=gomtb-manifest
 ifeq ($(DOVENDOR),true)
 BUILD_FLAGS=-ldflags="-s -w" -mod=vendor
