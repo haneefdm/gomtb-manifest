@@ -206,13 +206,14 @@ type FetchUrlWithCb struct {
 func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 	results := map[string]any{}
 	var mu sync.Mutex
-	var wg sync.WaitGroup
+	var wgFetches sync.WaitGroup
+	var wgCallbacks sync.WaitGroup
 	// errChan := make(chan error, len(urls))
 
 	for ix, item := range urls {
-		wg.Add(1)
+		wgFetches.Add(1)
 		go func(index int, item FetchUrlWithCb) {
-			defer wg.Done()
+			defer wgFetches.Done()
 
 			f.limiter <- struct{}{}        // Acquire
 			defer func() { <-f.limiter }() // Release
@@ -231,14 +232,17 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 			}
 			mu.Unlock()
 			if item.Callback != nil {
+				wgCallbacks.Add(1)
 				go func(url string, data []byte, err error, index int) {
 					item.Callback(url, data, err, index)
+					wgCallbacks.Done()
 				}(item.Url, data, err, item.Index)
 			}
 		}(ix, item)
 	}
 
-	wg.Wait()
+	wgFetches.Wait()
+	wgCallbacks.Wait()
 	// close(errChan)
 	return results
 }

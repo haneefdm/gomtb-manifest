@@ -75,7 +75,21 @@ func doMain() {
 		return
 	}
 	fmt.Printf("Finished ingesting super manifest in %d ms\n", timer.ElapsedMs())
-	_ = superManifest // To avoid unused variable warning during development
+	count := 1
+	for id, board := range *superManifest.GetBoardsMap() {
+		fmt.Printf("%3d. Board ID: %-20s, MCUs:%v\n", count, id, board.Chips.MCU)
+		count++
+	}
+	count = 1
+	for id, app := range *superManifest.GetAppsMap() {
+		fmt.Printf("%3d. App ID: %-20s, Versions:%d\n", count, id, len(app.Versions.Version))
+		count++
+	}
+	count = 1
+	for id, mw := range *superManifest.GetMiddlewareMap() {
+		fmt.Printf("%3d. MW ID: %-20s, Capabilities: %v\n", count, id, mw.ReqCapabilitiesV2)
+		count++
+	}
 	os.Exit(0)
 
 	jsonData, err := json.MarshalIndent(superManifest, "", "  ")

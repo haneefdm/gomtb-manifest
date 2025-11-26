@@ -109,7 +109,7 @@ build-all: clean quality-check vendor
 	GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/linux-x64/$(BINARY_NAME) ./$(CMD_DIR)
 	GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/windows-x64/$(BINARY_NAME).exe ./$(CMD_DIR)
 	@echo "✅ Cross-platform builds complete"
-	@ls -la bin/*
+	@ls -la bin/*/*
 
 # Install to system
 install: $(BINARY_FULL)
