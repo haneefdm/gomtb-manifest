@@ -1,0 +1,25 @@
+# Temporary editor files
+*.*.{[0-9]*}
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
+# gomd runtime
+.gomd/
+
+# derived binary files
+bin/
+
+# Generated HTML outputs
+*.html
+!samples/*.html
+!examples/**/*.html
+
+# Air temporary directory
+tmp/
+
+# Vendored dependencies (commit this for offline builds)
+# vendor/
+!vendor/.timestamp
