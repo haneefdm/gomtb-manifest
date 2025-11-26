@@ -153,8 +153,9 @@ func CEExampleMain() {
 	}
 }
 
-// loadManifestFromFile demonstrates loading from actual files
-func loadManifestFromFile(filename string) (*Apps, error) {
+// LoadManifestFromFile demonstrates loading from actual files
+// LoadManifestFromFile demonstrates loading from actual files
+func LoadManifestFromFile(filename string) (*Apps, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
@@ -168,8 +169,8 @@ func loadManifestFromFile(filename string) (*Apps, error) {
 	return &apps, nil
 }
 
-// findCompatibleApps returns apps that match the given capabilities
-func findCompatibleApps(apps *Apps, availableCapabilities map[string]bool) []App {
+// FindCompatibleApps returns apps that match the given capabilities
+func FindCompatibleApps(apps *Apps, availableCapabilities map[string]bool) []App {
 	compatible := make([]App, 0)
 
 	for _, app := range apps.App {
@@ -183,7 +184,7 @@ func findCompatibleApps(apps *Apps, availableCapabilities map[string]bool) []App
 }
 
 // Example of finding compatible versions for a specific app
-func findCompatibleVersions(app *App, availableCapabilities map[string]bool) []CEVersion {
+func FindCompatibleVersions(app *App, availableCapabilities map[string]bool) []CEVersion {
 	compatible := make([]CEVersion, 0)
 
 	for _, version := range app.Versions.Version {

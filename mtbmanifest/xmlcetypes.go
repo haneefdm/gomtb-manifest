@@ -248,3 +248,11 @@ func (v *CEVersion) GetToolsVersion() (version string, isMin bool) {
 func (apps *Apps) IsV2() bool {
 	return apps.Version == "2.0"
 }
+
+func ReadAppsManifest(data []byte) (*Apps, error) {
+	var apps Apps
+	if err := xml.Unmarshal(data, &apps); err != nil {
+		return nil, err
+	}
+	return &apps, nil
+}

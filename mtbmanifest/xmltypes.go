@@ -6,6 +6,53 @@ import (
 	"fmt"
 )
 
+// Super Manifest structures
+// This is the root manifest that points to all other manifests
+
+type SuperManifest struct {
+	XMLName                xml.Name               `xml:"super-manifest"`
+	Version                string                 `xml:"version,attr"`
+	BoardManifestList      BoardManifestList      `xml:"board-manifest-list"`
+	AppManifestList        AppManifestList        `xml:"app-manifest-list"`
+	MiddlewareManifestList MiddlewareManifestList `xml:"middleware-manifest-list"`
+}
+
+type BoardManifestList struct {
+	XMLName       xml.Name        `xml:"board-manifest-list"`
+	BoardManifest []BoardManifest `xml:"board-manifest"`
+}
+
+type BoardManifest struct {
+	XMLName       xml.Name `xml:"board-manifest"`
+	DependencyURL string   `xml:"dependency-url,attr,omitempty"`
+	CapabilityURL string   `xml:"capability-url,attr,omitempty"`
+	URI           string   `xml:"uri"`
+	Boards        *Boards
+}
+
+type AppManifestList struct {
+	XMLName     xml.Name      `xml:"app-manifest-list"`
+	AppManifest []AppManifest `xml:"app-manifest"`
+}
+
+type AppManifest struct {
+	XMLName xml.Name `xml:"app-manifest"`
+	URI     string   `xml:"uri"`
+	Apps    *Apps
+}
+
+type MiddlewareManifestList struct {
+	XMLName            xml.Name             `xml:"middleware-manifest-list"`
+	MiddlewareManifest []MiddlewareManifest `xml:"middleware-manifest"`
+}
+
+type MiddlewareManifest struct {
+	XMLName       xml.Name `xml:"middleware-manifest"`
+	DependencyURL string   `xml:"dependency-url,attr,omitempty"`
+	URI           string   `xml:"uri"`
+	Middlewares   *Middleware
+}
+
 type Boards struct {
 	XMLName xml.Name `xml:"boards"`
 	Boards  []Board  `xml:"board"`
@@ -47,8 +94,8 @@ type BoardVersion struct {
 
 // Middleware is the root element
 type Middleware struct {
-	XMLName    xml.Name         `xml:"middleware"`
-	Middleware []MiddlewareItem `xml:"middleware"`
+	XMLName     xml.Name         `xml:"middleware"`
+	Middlewares []MiddlewareItem `xml:"middleware"`
 }
 
 // MiddlewareItem represents a single middleware entry
@@ -136,6 +183,7 @@ type Capability struct {
 	Types       []string `json:"types"`
 }
 
+/*
 // Code Example Manifest structures
 // Handles both mtb-ce-manifest.xml and mtb-ce-manifest-fv2.xml
 type CEApps struct {
@@ -172,33 +220,62 @@ type CEVersion struct {
 	Num                         string   `xml:"num"`
 	Commit                      string   `xml:"commit"`
 }
+*/
 
-func ReadSuperManifest(xmlData []byte) (*Boards, error) {
-	var boards Boards
-	err := xml.Unmarshal(xmlData, &boards)
+const printData = false
+
+func ReadSuperManifest(xmlData []byte) (*SuperManifest, error) {
+	var superManifest SuperManifest
+	err := xml.Unmarshal(xmlData, &superManifest)
 	if err != nil {
-		return Boards{}, err
+		return nil, err
 	}
 
-	// Access the data
-	for _, board := range boards.Boards {
-		fmt.Println(board.Name, board.ID)
+	if printData {
+		// Fetch all BSP manifests
+		for _, bm := range superManifest.BoardManifestList.BoardManifest {
+			fmt.Printf("BSP: %s\n", bm.URI)
+			if bm.DependencyURL != "" {
+				fmt.Printf("  Dependencies: %s\n", bm.DependencyURL)
+			}
+			if bm.CapabilityURL != "" {
+				fmt.Printf("  Capabilities: %s\n", bm.CapabilityURL)
+			}
+		}
+	}
+	return &superManifest, nil
+}
+
+func ReadBoardManifest(xmlData []byte) (*Boards, error) {
+	var boards = Boards{}
+	err := xml.Unmarshal(xmlData, &boards)
+	if err != nil {
+		return nil, err
+	}
+
+	if printData {
+		// Access the data
+		for _, board := range boards.Boards {
+			fmt.Println(board.Name, board.ID)
+		}
 	}
 	return &boards, nil
 }
 
 func ReadMiddlewareManifest(xmlData []byte) (*Middleware, error) {
-	var middleware Middleware
+	var middleware = Middleware{}
 	err := xml.Unmarshal(xmlData, &middleware)
 	if err != nil {
 		return nil, err
 	}
 
-	// Access middleware items
-	for _, item := range mw.Middleware {
-		fmt.Printf("Middleware: %s (ID: %s)\n", item.Name, item.ID)
-		fmt.Printf("  Category: %s\n", item.Category)
-		fmt.Printf("  Versions: %d\n", len(item.Versions.Version))
+	if printData {
+		// Access middleware items
+		for _, item := range middleware.Middlewares {
+			fmt.Printf("Middleware: %s (ID: %s)\n", item.Name, item.ID)
+			fmt.Printf("  Category: %s\n", item.Category)
+			fmt.Printf("  Versions: %d\n", len(item.Versions.Version))
+		}
 	}
 	return &middleware, nil
 }
@@ -208,17 +285,19 @@ func ReadMiddlewareManifest(xmlData []byte) (*Middleware, error) {
 // features/hardware blocks are available on different boards and chips. Notice the
 // types field indicates whether it applies to "chip", "board", or "generation".
 func ReadCapabilitiesManifest(jsonData []byte) (*CapabilitiesManifest, error) {
-	var manifest CapabilitiesManifest
+	var manifest = CapabilitiesManifest{}
 	err := json.Unmarshal(jsonData, &manifest)
 	if err != nil {
 		return nil, err
 	}
 
-	// Access capabilities
-	for _, cap := range manifest.Capabilities {
-		fmt.Printf("Capability: %s (%s)\n", cap.Name, cap.Token)
-		fmt.Printf("  Category: %s\n", cap.Category)
-		fmt.Printf("  Types: %v\n", cap.Types)
+	if printData {
+		// Access capabilities
+		for _, cap := range manifest.Capabilities {
+			fmt.Printf("Capability: %s (%s)\n", cap.Name, cap.Token)
+			fmt.Printf("  Category: %s\n", cap.Category)
+			fmt.Printf("  Types: %v\n", cap.Types)
+		}
 	}
 	return &manifest, nil
 }
@@ -227,24 +306,26 @@ func ReadCapabilitiesManifest(jsonData []byte) (*CapabilitiesManifest, error) {
 // versions of libraries A, B, C, etc." Essential for dependency resolution
 // and ensuring compatible versions are used together!
 func ReadDependenciesManifest(xmlData []byte) (*Dependencies, error) {
-	var dependencies Dependencies
-	err := xml.Unmarshal(xmlData, &dependencies)
+	var deps = Dependencies{}
+	err := xml.Unmarshal(xmlData, &deps)
 	if err != nil {
 		return nil, err
 	}
 
-	// Access dependencies
-	for _, depender := range deps.Depender {
-		fmt.Printf("BSP: %s\n", depender.ID)
-		for _, ver := range depender.Versions.Version {
-			fmt.Printf("  Version: %s\n", ver.Commit)
-			fmt.Printf("    Dependencies:\n")
-			for _, dep := range ver.Dependees.Dependee {
-				fmt.Printf("      - %s @ %s\n", dep.ID, dep.Commit)
+	if printData {
+		// Access dependencies
+		for _, depender := range deps.Depender {
+			fmt.Printf("BSP: %s\n", depender.ID)
+			for _, ver := range depender.Versions.Version {
+				fmt.Printf("  Version: %s\n", ver.Commit)
+				fmt.Printf("    Dependencies:\n")
+				for _, dep := range ver.Dependees.Dependee {
+					fmt.Printf("      - %s @ %s\n", dep.ID, dep.Commit)
+				}
 			}
 		}
 	}
-	return &dependencies, nil
+	return &deps, nil
 }
 
 /*
@@ -273,7 +354,7 @@ Plain items are required
 Example: req_capabilities_v2="[psoc6,t2gbe] hal led [flash_2048k,flash_1024k]" means:
 
 (psoc6 OR t2gbe) AND hal AND led AND (flash_2048k OR flash_1024k)
-*/
+
 func ReadCEManifest(xmlData []byte) (CEApps, error) {
 	var ceApps CEApps
 	err := xml.Unmarshal(xmlData, &ceApps)
@@ -288,3 +369,4 @@ func ReadCEManifest(xmlData []byte) (CEApps, error) {
 	}
 	return ceApps, nil
 }
+*/

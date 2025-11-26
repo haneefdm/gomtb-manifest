@@ -13,7 +13,7 @@ func GetUrlContent(fileURL string) ([]byte, error) {
 	if ProxyUrl != "" {
 		parsedProxyURL, err := url.Parse(ProxyUrl)
 		if err != nil {
-			return nil, fmt.Errorf("Error parsing proxy URL: %v", err)
+			return nil, fmt.Errorf("error parsing proxy URL: %v", err)
 		}
 
 		// Create a custom HTTP client with proxy settings
@@ -30,7 +30,7 @@ func GetUrlContent(fileURL string) ([]byte, error) {
 	// Make the GET request
 	resp, err := client.Get(fileURL)
 	if err != nil {
-		return nil, fmt.Errorf("Error making GET request: %v", err)
+		return nil, fmt.Errorf("error making GET request: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -41,7 +41,7 @@ func GetUrlContent(fileURL string) ([]byte, error) {
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading response body: %v", err)
+		return nil, fmt.Errorf("error reading response body: %v", err)
 	}
 	return bodyBytes, nil
 }

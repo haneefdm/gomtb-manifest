@@ -2,15 +2,9 @@
 .PHONY: help clean install dev debug watch watch-air watch-nodemon quality-check test build-all check-deps vendor
 
 # Build variables
-DOVENDOR=true
 BINARY_NAME=gomtb-manifest
-ifeq ($(DOVENDOR),true)
 BUILD_FLAGS=-ldflags="-s -w" -mod=vendor
 VENFORFILE=vendor/.timestamp
-else
-BUILD_FLAGS=-ldflags="-s -w"
-VENFORFILE=
-endif
 CMD_DIR=cmd/gomtb-manifest
 
 
@@ -53,9 +47,7 @@ deps:
 	@echo "📦 Installing dependencies..."
 	go mod download
 	go mod tidy
-ifeq ($(DOVENDOR),true)
 	go mod vendor
-endif
 	@echo "📦 Installing development tools..."
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install github.com/kisielk/errcheck@latest
@@ -81,7 +73,6 @@ check-deps:
 	@echo "To install all missing tools, run: make deps"
 	@echo ""
 
-ifeq ($(DOVENDOR),true)
 vendor: $(VENFORFILE)
 	@if [ ! -d "vendor" ]; then \
 		echo "⚠️  Vendor directory not found. Running 'go mod vendor'..."; \
@@ -93,10 +84,6 @@ $(VENFORFILE): go.mod go.sum
 	@echo "📦 Updating vendored dependencies..."
 	go mod vendor
 	@echo $(shell date) > $@
-else
-vendor:
-	@echo "📦 Vendoring disabled. Skipping..."
-endif
 
 # Development build (quick, minimal checks)
 dev: debug
@@ -107,18 +94,14 @@ dev: debug
 debug: vendor
 	@mkdir -p bin
 	@echo "🐛 Building debug binary..."
-ifeq ($(DOVENDOR),true)
 	go build -mod=vendor -gcflags="all=-N -l" -o $(BINARY_FULL) ./$(CMD_DIR)
-else
-	go build -gcflags="all=-N -l" -o $(BINARY_FULL) ./$(CMD_DIR)
-endif
 	@echo "✅ Debug build complete (ready for delve)"
 ifeq ($(GOOS),windows)
 	cp $(BINARY_FULL) $(BINARY_FULL).exe
 endif
 
 # Cross-platform production builds
-build-all: clean quality-check test vendor
+build-all: clean quality-check vendor
 	@echo "🌍 Building for all platforms..."
 	@mkdir -p bin
 	GOOS=darwin GOARCH=arm64 go build $(BUILD_FLAGS) -o bin/darwin-arm64/$(BINARY_NAME) ./$(CMD_DIR)
