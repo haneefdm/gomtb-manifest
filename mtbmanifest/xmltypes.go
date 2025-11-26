@@ -15,6 +15,9 @@ type SuperManifest struct {
 	BoardManifestList      BoardManifestList      `xml:"board-manifest-list"`
 	AppManifestList        AppManifestList        `xml:"app-manifest-list"`
 	MiddlewareManifestList MiddlewareManifestList `xml:"middleware-manifest-list"`
+	BoardsMap              map[string]*Board
+	AppMap                 map[string]*App
+	MiddlewareMap          map[string]*MiddlewareItem
 }
 
 type BoardManifestList struct {
@@ -326,6 +329,51 @@ func ReadDependenciesManifest(xmlData []byte) (*Dependencies, error) {
 		}
 	}
 	return &deps, nil
+}
+
+func (manifest *SuperManifest) GetBoardsMap() *map[string]*Board {
+	if (manifest.BoardsMap != nil) && (len(manifest.BoardsMap) > 0) {
+		return &manifest.BoardsMap
+	}
+	manifest.BoardsMap = make(map[string]*Board)
+	for _, bm := range manifest.BoardManifestList.BoardManifest {
+		if bm.Boards != nil {
+			for _, board := range bm.Boards.Boards {
+				manifest.BoardsMap[board.ID] = &board
+			}
+		}
+	}
+	return &manifest.BoardsMap
+}
+
+func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
+	if (manifest.AppMap != nil) && (len(manifest.AppMap) > 0) {
+		return &manifest.AppMap
+	}
+	manifest.AppMap = make(map[string]*App)
+	for _, am := range manifest.AppManifestList.AppManifest {
+		if am.Apps != nil {
+			for _, app := range am.Apps.App {
+				manifest.AppMap[app.ID] = &app
+			}
+		}
+	}
+	return &manifest.AppMap
+}
+
+func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
+	if (manifest.MiddlewareMap != nil) && (len(manifest.MiddlewareMap) > 0) {
+		return &manifest.MiddlewareMap
+	}
+	manifest.MiddlewareMap = make(map[string]*MiddlewareItem)
+	for _, mm := range manifest.MiddlewareManifestList.MiddlewareManifest {
+		if mm.Middlewares != nil {
+			for _, item := range mm.Middlewares.Middlewares {
+				manifest.MiddlewareMap[item.ID] = &item
+			}
+		}
+	}
+	return &manifest.MiddlewareMap
 }
 
 /*

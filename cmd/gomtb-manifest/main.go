@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -88,7 +89,7 @@ func doMain() {
 func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
 	// Example usage of fetching and reading the super manifest
 	fmt.Println("Fetching super manifest...")
-	urlFetcher := NewManifestFetcher(10)
+	urlFetcher := NewManifestFetcher(runtime.NumCPU())
 
 	superData, err := urlFetcher.Cache.Get(SuperManifestURL)
 	if err != nil {
@@ -107,12 +108,12 @@ func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
 			Url: mManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
 				fmt.Printf("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				board, err := UnmarshalManifest(data, err, mtbmanifest.ReadBoardManifest)
+				boards, err := UnmarshalManifest(data, err, mtbmanifest.ReadBoardManifest)
 				if err != nil {
 					fmt.Printf("Error fetching %s: %v\n", urlStr, err)
 				} else {
 					mu.Lock()
-					superManifest.BoardManifestList.BoardManifest[index].Boards = board
+					superManifest.BoardManifestList.BoardManifest[index].Boards = boards
 					mu.Unlock()
 				}
 			},

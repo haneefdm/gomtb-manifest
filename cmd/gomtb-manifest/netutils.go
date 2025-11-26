@@ -32,7 +32,7 @@ func GetUrlContent(fileURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error making GET request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check if the request was successful
 	if resp.StatusCode != http.StatusOK {

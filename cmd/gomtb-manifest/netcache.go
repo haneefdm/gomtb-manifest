@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -14,34 +17,21 @@ import (
 )
 
 /*
-```
+// How it works:
 
-**How it works:**
+// 1. First request (cold start, no cache):
+//    User request → Cache miss → Fetch from network (2-4s) → Return data
 
-1. **First request** (cold start, no cache):
-```
+// 2. Subsequent requests (cache fresh, age < TTL):
+//    User request → Cache hit → Return immediately (2ms) → Done
 
-	User request → Cache miss → Fetch from network (2-4s) → Return data
+// 3. Subsequent requests (cache stale, age >= TTL):
+//    User request → Cache hit → Return stale data (2ms) → Queue background refresh
+//    Background → Fetch fresh data → Update cache → Ready for next request
 
-```
-2. **Subsequent requests** (cache fresh, age < TTL):
-```
-
-	User request → Cache hit → Return immediately (2ms) → Done
-
-```
-3. **Subsequent requests** (cache stale, age >= TTL):
-```
-
-	User request → Cache hit → Return stale data (2ms) → Queue background refresh
-	Background → Fetch fresh data → Update cache → Ready for next request
-
-```
-4. **Network failure** (background refresh fails):
-```
-
-	User request → Cache hit → Return stale data (better than error!)
-	Background → Fetch fails → Log error → Keep using stale data
+// 4. Network failure (background refresh fails):
+//    User request → Cache hit → Return stale data (better than error!)
+//    Background → Fetch fails → Log error → Keep using stale data
 */
 
 type ManifestFetcher struct {
@@ -58,7 +48,11 @@ type ManifestCache struct {
 	refreshing   sync.Map // track URLs being refreshed
 }
 
-const defaultTTL = 15 * 24 * time.Hour // 15 days
+const (
+	compressionThreshold = 10 * 1024 // 10KB
+	compressionFlag      = 0x01
+	defaultTTL           = 15 * 24 * time.Hour // 15 days
+)
 
 func NewManifestCache(cacheDir string, ttl time.Duration) *ManifestCache {
 	if cacheDir == "" {
@@ -84,25 +78,19 @@ func (c *ManifestCache) Close() {
 }
 
 func (c *ManifestCache) Get(urlStr string) ([]byte, error) {
-	cacheFile := c.urlToFilename(urlStr)
-
-	// Try to read from cache first (even if stale)
-	data, err := os.ReadFile(cacheFile)
+	data, err := c.readCache(urlStr)
 	if err == nil {
-		_, data, err = decodeBytesToUrl(data)
-		if err == nil {
-			// Got cached data - check if stale
-			info, _ := os.Stat(cacheFile)
-			age := time.Since(info.ModTime())
+		// Cache hit - check if stale
+		info, _ := os.Stat(c.urlToFilename(urlStr))
+		age := time.Since(info.ModTime())
 
-			if age >= c.ttl {
-				// Stale - queue for background refresh
-				c.queueRefresh(urlStr)
-			}
-
-			// Return cached data immediately (stale or not)
-			return data, nil
+		if age >= c.ttl {
+			// Stale - queue for background refresh
+			c.queueRefresh(urlStr)
 		}
+
+		// Return cached data immediately (stale or not)
+		return data, nil
 	}
 
 	// Cache miss - must fetch synchronously
@@ -147,15 +135,10 @@ func (c *ManifestCache) fetchAndCache(urlStr string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Save to cache
-	cacheFile := c.urlToFilename(urlStr)
-	os.MkdirAll(filepath.Dir(cacheFile), 0755)
-	encodedData := encodeUrlToBytes(urlStr)
-	encodedData = append(encodedData, data...)
-	if err := os.WriteFile(cacheFile, encodedData, 0644); err != nil {
-		log.Printf("Warning: failed to cache %s: %v", urlStr, err)
+	err = c.writeCache(urlStr, data)
+	if err != nil {
+		log.Printf("Warning: failed to write cache for %s: %v", urlStr, err)
 	}
-
 	return data, nil
 }
 
@@ -164,7 +147,7 @@ func (c *ManifestCache) fetchFromNetwork(urlStr string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("http get: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("http status %d", resp.StatusCode)
@@ -195,15 +178,9 @@ func (c *ManifestCache) RefreshAllStale() {
 
 		info, _ := entry.Info()
 		if time.Since(info.ModTime()) >= c.ttl {
-			data, err := os.ReadFile(filepath.Join(c.cacheDir, entry.Name()))
-			if err == nil {
-				oldUrl, _, err := decodeBytesToUrl(data)
-				if err == nil {
-					tmp := c.urlToFilename(oldUrl)
-					if tmp == entry.Name() {
-						c.queueRefresh(oldUrl)
-					}
-				}
+			oldUrl, err := c.readUrlFromCache(filepath.Join(c.cacheDir, entry.Name()))
+			if err == nil && oldUrl != "" {
+				c.queueRefresh(oldUrl)
 			}
 		}
 	}
@@ -254,7 +231,9 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 			}
 			mu.Unlock()
 			if item.Callback != nil {
-				item.Callback(item.Url, data, err, item.Index)
+				go func(url string, data []byte, err error, index int) {
+					item.Callback(url, data, err, index)
+				}(item.Url, data, err, item.Index)
 			}
 		}(ix, item)
 	}
@@ -269,7 +248,6 @@ func (f *ManifestFetcher) FetchAll(urls []string) map[string]any {
 	results := map[string]any{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	// errChan := make(chan error, len(urls))
 
 	for _, urlStr := range urls {
 		wg.Add(1)
@@ -280,10 +258,6 @@ func (f *ManifestFetcher) FetchAll(urls []string) map[string]any {
 			defer func() { <-f.limiter }() // Release
 
 			data, err := f.Cache.Get(u)
-			// if err != nil {
-			// 	errChan <- fmt.Errorf("%s: %w", u, err)
-			// 	return
-			// }
 
 			mu.Lock()
 			if err != nil {
@@ -296,21 +270,7 @@ func (f *ManifestFetcher) FetchAll(urls []string) map[string]any {
 	}
 
 	wg.Wait()
-	// close(errChan)
 	return results
-
-	/*
-		// Collect any errors
-		var errs []error
-		for err := range errChan {
-			errs = append(errs, err)
-		}
-		if len(errs) > 0 {
-			return results, fmt.Errorf("fetch errors: %v", errs)
-		}
-
-		return results, nil
-	*/
 }
 
 // Add to cache struct
@@ -323,39 +283,192 @@ func (c *ManifestCache) ClearStale() error {
 	for _, entry := range entries {
 		info, _ := entry.Info()
 		if time.Since(info.ModTime()) > c.ttl {
-			os.Remove(filepath.Join(c.cacheDir, entry.Name()))
+			_ = os.Remove(filepath.Join(c.cacheDir, entry.Name()))
 		}
 	}
 	return nil
 }
 
-const magic uint16 = 0x4D43 // 'MC' for "Manifest Cache"
-
-// Helper functions to encode/decode URL with length prefix
-func encodeUrlToBytes(urlStr string) []byte {
-	tmp := []byte(urlStr)
-	count := len(tmp)
-	ret := make([]byte, 4+count)
-	ret[0] = byte(magic >> 8)
-	ret[1] = byte(magic & 0xff)
-	ret[2] = byte(count >> 8)
-	ret[3] = byte(count & 0xff)
-	copy(ret[4:], tmp)
-	return ret
+// Cache file header structure. DO NOT CHANGE!
+// If you need to change, bump the version number and handle old versions in code.
+// One simple way would be to invalidate old versions. But version HAS to be the 3rd byte.
+// Also, the magic number has to be the first two bytes and changing that would also invalidate old caches.
+type CacheHeader struct {
+	Magic    [2]byte
+	Version  uint8
+	Flags    uint8 // bit 0: compressed
+	Checksum uint8 // simple checksum of URL bytes
+	URLSize  uint16
 }
 
-// Returns decoded URL, remaining bytes, error
-func decodeBytesToUrl(data []byte) (string, []byte, error) {
-	if len(data) < 4 {
-		return "", data, fmt.Errorf("data too short to decode URL")
+func validateHeader(header *CacheHeader, urlStr string) error {
+	if header.Magic != [2]byte{'M', 'C'} {
+		return fmt.Errorf("invalid magic number")
 	}
-	magicRead := uint16(data[0])<<8 | uint16(data[1])
-	if magicRead != magic {
-		return "", data, fmt.Errorf("invalid magic number")
+	if header.Version != 1 {
+		return fmt.Errorf("unsupported version %d", header.Version)
 	}
-	count := int(data[2])<<8 | int(data[3])
-	if len(data) < 4+count {
-		return "", data, fmt.Errorf("data length mismatch")
+	urlBytes := []byte(urlStr)
+	if header.Checksum != simpleChecksum(urlBytes) {
+		return fmt.Errorf("checksum mismatch")
 	}
-	return string(data[4 : 4+count]), data[4+count:], nil
+	return nil
+}
+
+func (c *ManifestCache) writeCache(urlStr string, content []byte) error {
+	err := os.MkdirAll(c.cacheDir, 0o755)
+	if err != nil {
+		return err
+	}
+	filename := c.urlToFilename(urlStr)
+	urlBytes := []byte(urlStr)
+
+	// Decide: compress or not?
+	shouldCompress := len(content) > compressionThreshold
+
+	var finalContent []byte
+	var flags uint8
+
+	if shouldCompress {
+		// Compress with gzip (stdlib, widely compatible)
+		var buf bytes.Buffer
+		gzw := gzip.NewWriter(&buf)
+		_, _ = gzw.Write(content)
+		_ = gzw.Close()
+
+		compressed := buf.Bytes()
+
+		// Only use compression if it actually helped
+		if len(compressed) < len(content) {
+			finalContent = compressed
+			flags |= compressionFlag
+		} else {
+			finalContent = content
+			flags = 0
+		}
+	} else {
+		finalContent = content
+		flags = 0
+	}
+
+	// Build header
+	header := CacheHeader{
+		Magic:    [2]byte{'M', 'C'},
+		Version:  1,
+		Flags:    flags,
+		Checksum: simpleChecksum(urlBytes),
+		URLSize:  uint16(len(urlBytes)),
+	}
+
+	// Write atomically to temp file, then rename
+	tmpFile := filename + ".tmp"
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+	}()
+
+	err = binary.Write(f, binary.BigEndian, &header)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(urlBytes)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(finalContent)
+	if err != nil {
+		return err
+	}
+	closed = true
+	_ = f.Close() // We have a defer close above. But needs to be closed before rename
+
+	// Atomic rename (even on Windows)
+	return os.Rename(tmpFile, filename)
+}
+
+func (c *ManifestCache) readCache(urlStr string) ([]byte, error) {
+	filename := c.urlToFilename(urlStr)
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	// Read and validate header
+	var header CacheHeader
+	if err := binary.Read(f, binary.BigEndian, &header); err != nil {
+		return nil, err
+	}
+
+	// Read URL and validate
+	urlBytes := make([]byte, header.URLSize)
+	_, err = io.ReadFull(f, urlBytes)
+	if err != nil {
+		return nil, err
+	}
+	readUrlStr := string(urlBytes)
+	if readUrlStr != urlStr {
+		return nil, fmt.Errorf("URL mismatch in cache")
+	}
+	if err := validateHeader(&header, readUrlStr); err != nil {
+		return nil, err
+	}
+
+	// Read content
+	content, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decompress if needed
+	if header.Flags&compressionFlag != 0 {
+		gzr, err := gzip.NewReader(bytes.NewReader(content))
+		if err != nil {
+			return nil, err
+		}
+		_ = gzr.Close()
+		return io.ReadAll(gzr)
+	}
+
+	return content, nil
+}
+
+func (c *ManifestCache) readUrlFromCache(filename string) (string, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	// Read and validate header
+	var header CacheHeader
+	if err := binary.Read(f, binary.BigEndian, &header); err != nil {
+		return "", err
+	}
+
+	// Read URL and validate
+	urlBytes := make([]byte, header.URLSize)
+	_, err = io.ReadFull(f, urlBytes)
+	if err != nil {
+		return "", err
+	}
+	urlStr := string(urlBytes)
+	if err := validateHeader(&header, urlStr); err != nil {
+		return "", err
+	}
+	return urlStr, nil
+}
+
+func simpleChecksum(data []byte) uint8 {
+	var sum uint8
+	for _, b := range data {
+		sum ^= b
+	}
+	return sum
 }
