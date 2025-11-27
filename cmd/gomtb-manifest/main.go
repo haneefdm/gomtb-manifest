@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
-	"sync"
 	"time"
 
 	"github.com/haneefdm/gomtb-manifest/mtbmanifest"
@@ -36,8 +34,31 @@ func (t *Timer) ElapsedMs() int64 {
 	return NowMs() - t.startTime
 }
 
+type Logger struct {
+	Logger *log.Logger
+}
+
+var logger = &Logger{
+	Logger: log.New(os.Stdout, "", log.LstdFlags),
+}
+
+func (l *Logger) Infof(format string, args ...interface{}) {
+	l.Logger.Printf("[INFO] "+format, args...)
+}
+
+func (l *Logger) Debugf(format string, args ...interface{}) {
+	l.Logger.Printf("[DEBUG] "+format, args...)
+}
+
+func (l *Logger) Errorf(format string, args ...interface{}) {
+	l.Logger.Printf("[ERROR] "+format, args...)
+}
+
+func (l *Logger) Warningf(format string, args ...interface{}) {
+	l.Logger.Printf("[WARNING] "+format, args...)
+}
+
 var CY_TOOLS_PATH = "/Applications/MoodusToolbox/tools_3.6"
-var SuperManifestURL = "https://github.com/Infineon/mtb-super-manifest/raw/v2.X/mtb-super-manifest-fv2.xml"
 var ProxyUrl = "" // e.g., "http://user:password@your_proxy_host:your_proxy_port"
 
 var options struct {
@@ -57,9 +78,10 @@ func main() {
 }
 
 func doMain() {
+	mtbmanifest.SetLogger(logger)
 	_, err := flags.Parse(&options)
 	if err != nil {
-		fmt.Printf("Error parsing command-line options: %v\n", err)
+		logger.Errorf("Error parsing command-line options: %v\n", err)
 		return
 	}
 	if options.showHelp {
@@ -69,37 +91,38 @@ func doMain() {
 
 	timer := NewTimer()
 	// For demonstration, we will just ingest the manifest and print the number of boards
-	superManifest, err := ingestManifestTree()
+	superManifest, err := mtbmanifest.IngestManifestTree("")
 	if err != nil {
-		fmt.Printf("Error ingesting manifest: %v\n", err)
+		logger.Errorf("Error ingesting manifest: %v\n", err)
 		return
 	}
-	fmt.Printf("Finished ingesting super manifest in %d ms\n", timer.ElapsedMs())
+
+	logger.Infof("Finished ingesting super manifest in %d ms\n", timer.ElapsedMs())
 	if false {
 		for _, manifest := range superManifest.BoardManifestList.BoardManifest {
 			if manifest.DependencyURL != "" || manifest.CapabilityURL != "" {
-				fmt.Printf("Board manifest URL: %s\n", manifest.URI)
+				logger.Infof("Board manifest URL: %s\n", manifest.URI)
 			}
 			if manifest.DependencyURL != "" {
-				fmt.Printf("    Dependency URL: %s\n", manifest.DependencyURL)
+				logger.Infof("    Dependency URL: %s\n", manifest.DependencyURL)
 			}
 			if manifest.CapabilityURL != "" {
-				fmt.Printf("    Capability URL: %s\n", manifest.CapabilityURL)
+				logger.Infof("    Capability URL: %s\n", manifest.CapabilityURL)
 			}
 		}
 		count := 1
 		for id, board := range *superManifest.GetBoardsMap() {
-			fmt.Printf("%3d. Board ID: %-20s, MCUs:%v\n", count, id, board.Chips.MCU)
+			logger.Infof("%3d. Board ID: %-20s, MCUs:%v\n", count, id, board.Chips.MCU)
 			count++
 		}
 		count = 1
 		for id, app := range *superManifest.GetAppsMap() {
-			fmt.Printf("%3d. App ID: %-20s, Versions:%d\n", count, id, len(app.Versions.Version))
+			logger.Infof("%3d. App ID: %-20s, Versions:%d\n", count, id, len(app.Versions.Version))
 			count++
 		}
 		count = 1
 		for id, mw := range *superManifest.GetMiddlewareMap() {
-			fmt.Printf("%3d. MW ID: %-20s, Capabilities: %v\n", count, id, mw.ReqCapabilitiesV2)
+			logger.Infof("%3d. MW ID: %-20s, Capabilities: %v\n", count, id, mw.ReqCapabilitiesV2)
 			count++
 		}
 	}
@@ -108,106 +131,21 @@ func doMain() {
 	board := (*superManifest.GetBoardsMap())[name]
 	if board != nil {
 		board.BSPDependencies, _ = superManifest.GetBSPDependencies(board.Origin.DependencyURL, board.ID)
-		board.BSPCapabilities, _ = superManifest.GetBSPCapabilitiesManifest(board.Origin.CapabilityURL)
-		fmt.Printf("Found board %s:\n", name)
+		logger.Infof("Found board %s:\n", name)
 		jsonData, _ := json.MarshalIndent(board, "", "  ")
-		fmt.Printf("  Description:\n%s\n", jsonData)
+		logger.Infof("  Description:\n%s\n", jsonData)
+		board.BSPCapabilities, _ = superManifest.GetBSPCapabilitiesManifest(board.Origin.CapabilityURL)
 	} else {
-		fmt.Printf("Error: Board %s not found\n", name)
+		logger.Errorf("Error: Board %s not found\n", name)
 	}
 	os.Exit(0)
 
 	jsonData, err := json.MarshalIndent(superManifest, "", "  ")
 	if err != nil {
-		fmt.Printf("Error marshaling super manifest to JSON: %v\n", err)
+		logger.Errorf("Error marshaling super manifest to JSON: %v\n", err)
 		return
 	}
-	fmt.Printf("Ingested info from super manifest:\n%s\n", string(jsonData))
-}
-
-func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
-	// Example usage of fetching and reading the super manifest
-	fmt.Println("Fetching super manifest...")
-	urlFetcher := mtbmanifest.NewManifestFetcher(runtime.NumCPU())
-
-	superData, err := urlFetcher.Cache.Get(SuperManifestURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch super manifest %s: %v", SuperManifestURL, err)
-	}
-	superManifest, err := UnmarshalManifest(superData, err, mtbmanifest.ReadSuperManifest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse super manifest %s: %v", SuperManifestURL, err)
-	}
-	fmt.Printf("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
-
-	urls := []mtbmanifest.FetchUrlWithCb{}
-	var mu sync.Mutex
-	for ix, mManifest := range superManifest.BoardManifestList.BoardManifest {
-		item := mtbmanifest.FetchUrlWithCb{
-			Url: mManifest.URI, Index: ix,
-			Callback: func(urlStr string, data []byte, err error, index int) {
-				fmt.Printf("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				boards, err := UnmarshalManifest(data, err, mtbmanifest.ReadBoardManifest)
-				if err != nil {
-					fmt.Printf("Error fetching %s: %v\n", urlStr, err)
-				} else {
-					mu.Lock()
-					superManifest.BoardManifestList.BoardManifest[index].Boards = boards
-					mu.Unlock()
-				}
-			},
-		}
-		urls = append(urls, item)
-	}
-
-	for ix, aManifest := range superManifest.AppManifestList.AppManifest {
-		item := mtbmanifest.FetchUrlWithCb{
-			Url: aManifest.URI, Index: ix,
-			Callback: func(urlStr string, data []byte, err error, index int) {
-				fmt.Printf("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				app, err := UnmarshalManifest(data, err, mtbmanifest.ReadAppsManifest)
-				if err != nil {
-					fmt.Printf("Error fetching %s: %v\n", urlStr, err)
-				} else {
-					mu.Lock()
-					superManifest.AppManifestList.AppManifest[index].Apps = app
-					mu.Unlock()
-				}
-			},
-		}
-		urls = append(urls, item)
-	}
-	for ix, mManifest := range superManifest.MiddlewareManifestList.MiddlewareManifest {
-		item := mtbmanifest.FetchUrlWithCb{
-			Url: mManifest.URI, Index: ix,
-			Callback: func(urlStr string, data []byte, err error, index int) {
-				fmt.Printf("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				middleware, err := UnmarshalManifest(data, err, mtbmanifest.ReadMiddlewareManifest)
-				if err != nil {
-					fmt.Printf("Error fetching file %s: %v\n", urlStr, err)
-				} else {
-					mu.Lock()
-					superManifest.MiddlewareManifestList.MiddlewareManifest[index].Middlewares = middleware
-					mu.Unlock()
-				}
-			},
-		}
-		urls = append(urls, item)
-	}
-
-	urlFetcher.FetchAllWithCb(urls)
-	return superManifest, err
-}
-
-func UnmarshalManifest[T any](data []byte, err error, parseFunc func([]byte) (*T, error)) (*T, error) {
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch manifest: %v", err)
-	}
-	manifest, err := parseFunc(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %v", err)
-	}
-	return manifest, nil
+	logger.Infof("Ingested info from super manifest:\n%s\n", string(jsonData))
 }
 
 func UnmarshalXmlManifest[T any](item any, unmarshalFunc func([]byte) (*T, error)) (*T, error) {

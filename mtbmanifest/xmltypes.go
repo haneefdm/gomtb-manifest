@@ -4,7 +4,49 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"log"
+	"os"
+	"runtime"
+	"sync"
 )
+
+const SuperManifestURL = "https://github.com/Infineon/mtb-super-manifest/raw/v2.X/mtb-super-manifest-fv2.xml"
+
+type LoggerIF interface {
+	Infof(format string, args ...interface{})
+	Debugf(format string, args ...interface{})
+	Errorf(format string, args ...interface{})
+	Warningf(format string, args ...interface{})
+}
+
+type Logger struct {
+	Logger *log.Logger
+}
+
+func SetLogger(l LoggerIF) {
+	logger = l
+}
+
+func (l *Logger) Infof(format string, args ...interface{}) {
+	l.Logger.Printf("[INFO] "+format, args...)
+}
+
+func (l *Logger) Debugf(format string, args ...interface{}) {
+	l.Logger.Printf("[DEBUG] "+format, args...)
+}
+
+func (l *Logger) Errorf(format string, args ...interface{}) {
+	l.Logger.Printf("[ERROR] "+format, args...)
+}
+
+func (l *Logger) Warningf(format string, args ...interface{}) {
+	l.Logger.Printf("[WARNING] "+format, args...)
+}
+
+var defLogger = &Logger{
+	Logger: log.New(os.Stdout, "", log.LstdFlags),
+}
+var logger LoggerIF = defLogger
 
 // Super Manifest structures
 // This is the root manifest that points to all other manifests
@@ -195,26 +237,11 @@ type Capability struct {
 	Types       []string `json:"types"`
 }
 
-const printData = false
-
 func ReadSuperManifest(xmlData []byte) (*SuperManifest, error) {
 	var superManifest SuperManifest
 	err := xml.Unmarshal(xmlData, &superManifest)
 	if err != nil {
 		return nil, err
-	}
-
-	if printData {
-		// Fetch all BSP manifests
-		for _, bm := range superManifest.BoardManifestList.BoardManifest {
-			fmt.Printf("BSP: %s\n", bm.URI)
-			if bm.DependencyURL != "" {
-				fmt.Printf("  Dependencies: %s\n", bm.DependencyURL)
-			}
-			if bm.CapabilityURL != "" {
-				fmt.Printf("  Capabilities: %s\n", bm.CapabilityURL)
-			}
-		}
 	}
 	return &superManifest, nil
 }
@@ -224,13 +251,6 @@ func ReadBoardManifest(xmlData []byte) (*Boards, error) {
 	err := xml.Unmarshal(xmlData, &boards)
 	if err != nil {
 		return nil, err
-	}
-
-	if printData {
-		// Access the data
-		for _, board := range boards.Boards {
-			fmt.Println(board.Name, board.ID)
-		}
 	}
 	return &boards, nil
 }
@@ -242,14 +262,6 @@ func ReadMiddlewareManifest(xmlData []byte) (*Middleware, error) {
 		return nil, err
 	}
 
-	if printData {
-		// Access middleware items
-		for _, item := range middleware.Middlewares {
-			fmt.Printf("Middleware: %s (ID: %s)\n", item.Name, item.ID)
-			fmt.Printf("  Category: %s\n", item.Category)
-			fmt.Printf("  Versions: %d\n", len(item.Versions.Version))
-		}
-	}
 	return &middleware, nil
 }
 
@@ -263,15 +275,6 @@ func ReadCapabilitiesManifest(jsonData []byte) (*CapabilitiesManifest, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if printData {
-		// Access capabilities
-		for _, cap := range manifest.Capabilities {
-			fmt.Printf("Capability: %s (%s)\n", cap.Name, cap.Token)
-			fmt.Printf("  Category: %s\n", cap.Category)
-			fmt.Printf("  Types: %v\n", cap.Types)
-		}
-	}
 	return &manifest, nil
 }
 
@@ -283,20 +286,6 @@ func ReadDependenciesManifest(xmlData []byte) (*Dependencies, error) {
 	err := xml.Unmarshal(xmlData, &deps)
 	if err != nil {
 		return nil, err
-	}
-
-	if printData {
-		// Access dependencies
-		for _, depender := range deps.Depender {
-			fmt.Printf("BSP: %s\n", depender.ID)
-			for _, ver := range depender.Versions.Version {
-				fmt.Printf("  Version: %s\n", ver.Commit)
-				fmt.Printf("    Dependencies:\n")
-				for _, dep := range ver.Dependees.Dependee {
-					fmt.Printf("      - %s @ %s\n", dep.ID, dep.Commit)
-				}
-			}
-		}
 	}
 	return &deps, nil
 }
@@ -348,49 +337,6 @@ func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
 	}
 	return &manifest.MiddlewareMap
 }
-
-/*
-Key differences to note:
-
-Root element: v2 has <apps version="2.0">, v1 just has <apps>
-Capability syntax:
-
-v1: req_capabilities="psoc6 led" (space-delimited string)
-v2: req_capabilities_v2="[psoc6,t2gbe] hal led" (bracketed groups with commas, OR logic within brackets)
-
-New v2 fields:
-
-keywords attribute on <app>
-<category> element
-tools_min_version instead of tools_max_version
-
-Per-version capabilities also have v1/v2 variants with similar syntax differences
-
-The bracketed syntax in v2 appears to support complex boolean logic where:
-
-Items in brackets [a,b,c] are OR'd together
-Multiple bracket groups are AND'd together
-Plain items are required
-
-Example: req_capabilities_v2="[psoc6,t2gbe] hal led [flash_2048k,flash_1024k]" means:
-
-(psoc6 OR t2gbe) AND hal AND led AND (flash_2048k OR flash_1024k)
-
-func ReadCEManifest(xmlData []byte) (CEApps, error) {
-	var ceApps CEApps
-	err := xml.Unmarshal(xmlData, &ceApps)
-	if err != nil {
-		return CEApps{}, err
-	}
-
-	// Access CE apps
-	for _, app := range ceApps.App {
-		fmt.Printf("App: %s (ID: %s)\n", app.Name, app.ID)
-		fmt.Printf("  Versions: %d\n", len(app.Versions.Version))
-	}
-	return ceApps, nil
-}
-*/
 
 func (sm *SuperManifest) GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error) {
 	if (urlStr == "") || (urlStr == "N/A") {
@@ -446,4 +392,92 @@ func (sm *SuperManifest) GetBSPDependencies(urlStr string, bspId string) (*BSPDe
 		return nil, err
 	}
 	return depManifest.GetBSP(bspId), nil
+}
+
+func IngestManifestTree(urlStr string) (*SuperManifest, error) {
+	// Example usage of fetching and reading the super manifest
+	urlFetcher := NewManifestFetcher(runtime.NumCPU())
+	if urlStr == "" {
+		urlStr = SuperManifestURL
+	}
+
+	logger.Infof("Fetching super manifest...%s\n", urlStr)
+	superData, err := urlFetcher.Cache.Get(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch super manifest %s: %v", urlStr, err)
+	}
+	superManifest, err := UnmarshalManifest(superData, err, ReadSuperManifest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse super manifest %s: %v", urlStr, err)
+	}
+	logger.Infof("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
+
+	urls := []FetchUrlWithCb{}
+	var mu sync.Mutex
+	for ix, mManifest := range superManifest.BoardManifestList.BoardManifest {
+		item := FetchUrlWithCb{
+			Url: mManifest.URI, Index: ix,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				logger.Infof("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				boards, err := UnmarshalManifest(data, err, ReadBoardManifest)
+				if err != nil {
+					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					superManifest.BoardManifestList.BoardManifest[index].Boards = boards
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+
+	for ix, aManifest := range superManifest.AppManifestList.AppManifest {
+		item := FetchUrlWithCb{
+			Url: aManifest.URI, Index: ix,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				logger.Infof("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				app, err := UnmarshalManifest(data, err, ReadAppsManifest)
+				if err != nil {
+					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					superManifest.AppManifestList.AppManifest[index].Apps = app
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+	for ix, mManifest := range superManifest.MiddlewareManifestList.MiddlewareManifest {
+		item := FetchUrlWithCb{
+			Url: mManifest.URI, Index: ix,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				logger.Infof("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				middleware, err := UnmarshalManifest(data, err, ReadMiddlewareManifest)
+				if err != nil {
+					logger.Errorf("Error fetching file %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					superManifest.MiddlewareManifestList.MiddlewareManifest[index].Middlewares = middleware
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+
+	urlFetcher.FetchAllWithCb(urls)
+	return superManifest, err
+}
+
+func UnmarshalManifest[T any](data []byte, err error, parseFunc func([]byte) (*T, error)) (*T, error) {
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch manifest: %v", err)
+	}
+	manifest, err := parseFunc(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %v", err)
+	}
+	return manifest, nil
 }

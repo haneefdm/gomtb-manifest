@@ -201,8 +201,11 @@ func NewManifestFetcher(maxConcurrent int) *ManifestFetcher {
 }
 
 type FetchUrlWithCb struct {
-	Url      string
-	Index    int
+	Url   string
+	Index int
+	// The following callback is optional but if provided, it will be called
+	// when the URL is fetched (or failed). It will be called in its own goroutine.
+	// So, use proper synchronization if needed and have your own error/panic handling.
 	Callback func(urlString string, data []byte, err error, index int)
 }
 
@@ -215,22 +218,20 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 	var mu sync.Mutex
 	var wgFetches sync.WaitGroup
 	var wgCallbacks sync.WaitGroup
-	// errChan := make(chan error, len(urls))
 
 	for ix, item := range urls {
 		wgFetches.Add(1)
 		go func(index int, item FetchUrlWithCb) {
-			defer wgFetches.Done()
-
 			f.limiter <- struct{}{}        // Acquire
 			defer func() { <-f.limiter }() // Release
+			defer wgFetches.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("Fetch URL '%s' paniced unexpectedly: %v", item.Url, r)
+				}
+			}()
 
 			data, err := f.Cache.Get(item.Url)
-			// if err != nil {
-			// 	errChan <- fmt.Errorf("%s: %w", u, err)
-			// 	return
-			// }
-
 			mu.Lock()
 			if err != nil {
 				results[item.Url] = err
@@ -241,8 +242,13 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 			if item.Callback != nil {
 				wgCallbacks.Add(1)
 				go func(url string, data []byte, err error, index int) {
+					defer wgCallbacks.Done()
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Errorf("Fetch URL '%s' callback recovered from panic: %v", url, r)
+						}
+					}()
 					item.Callback(url, data, err, index)
-					wgCallbacks.Done()
 				}(item.Url, data, err, item.Index)
 			}
 		}(ix, item)
@@ -250,7 +256,6 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 
 	wgFetches.Wait()
 	wgCallbacks.Wait()
-	// close(errChan)
 	return results
 }
 
