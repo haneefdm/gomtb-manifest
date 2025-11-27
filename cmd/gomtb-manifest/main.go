@@ -98,34 +98,6 @@ func doMain() {
 	}
 
 	logger.Infof("Finished ingesting super manifest in %d ms\n", timer.ElapsedMs())
-	if false {
-		for _, manifest := range superManifest.BoardManifestList.BoardManifest {
-			if manifest.DependencyURL != "" || manifest.CapabilityURL != "" {
-				logger.Infof("Board manifest URL: %s\n", manifest.URI)
-			}
-			if manifest.DependencyURL != "" {
-				logger.Infof("    Dependency URL: %s\n", manifest.DependencyURL)
-			}
-			if manifest.CapabilityURL != "" {
-				logger.Infof("    Capability URL: %s\n", manifest.CapabilityURL)
-			}
-		}
-		count := 1
-		for id, board := range *superManifest.GetBoardsMap() {
-			logger.Infof("%3d. Board ID: %-20s, MCUs:%v\n", count, id, board.Chips.MCU)
-			count++
-		}
-		count = 1
-		for id, app := range *superManifest.GetAppsMap() {
-			logger.Infof("%3d. App ID: %-20s, Versions:%d\n", count, id, len(app.Versions.Version))
-			count++
-		}
-		count = 1
-		for id, mw := range *superManifest.GetMiddlewareMap() {
-			logger.Infof("%3d. MW ID: %-20s, Capabilities: %v\n", count, id, mw.ReqCapabilitiesV2)
-			count++
-		}
-	}
 
 	name := "KIT_PSE84_EVAL_EPC2"
 	board := (*superManifest.GetBoardsMap())[name]
@@ -139,13 +111,6 @@ func doMain() {
 		logger.Errorf("Error: Board %s not found\n", name)
 	}
 	os.Exit(0)
-
-	jsonData, err := json.MarshalIndent(superManifest, "", "  ")
-	if err != nil {
-		logger.Errorf("Error marshaling super manifest to JSON: %v\n", err)
-		return
-	}
-	logger.Infof("Ingested info from super manifest:\n%s\n", string(jsonData))
 }
 
 func UnmarshalXmlManifest[T any](item any, unmarshalFunc func([]byte) (*T, error)) (*T, error) {

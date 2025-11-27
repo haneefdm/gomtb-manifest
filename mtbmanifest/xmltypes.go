@@ -48,20 +48,72 @@ var defLogger = &Logger{
 }
 var logger LoggerIF = defLogger
 
-// Super Manifest structures
-// This is the root manifest that points to all other manifests
+// SuperManifestIF defines the interface for accessing and managing super manifest data.
+// This interface provides methods to retrieve boards, apps, middleware, BSP dependencies,
+// BSP capabilities, and merge multiple super manifests.
+type SuperManifestIF interface {
+	// GetBoardsMap returns a map of all boards indexed by their ID
+	GetBoardsMap() *map[string]*Board
 
+	// GetAppsMap returns a map of all apps indexed by their ID
+	GetAppsMap() *map[string]*App
+
+	// GetMiddlewareMap returns a map of all middleware items indexed by their ID
+	GetMiddlewareMap() *map[string]*MiddlewareItem
+
+	// GetBSPDependenciesManifest fetches and caches the BSP dependencies manifest from the given URL
+	GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error)
+
+	// GetBSPCapabilitiesManifest fetches and caches the BSP capabilities manifest from the given URL
+	GetBSPCapabilitiesManifest(urlStr string) (*BSPCapabilitiesManifest, error)
+
+	// GetBSPDependencies retrieves the BSP dependencies for a specific BSP ID from the given URL
+	GetBSPDependencies(urlStr string, bspId string) (*BSPDepender, error)
+
+	// AddSuperManifestFromURL fetches a super manifest from a URL and merges it into this one
+	AddSuperManifestFromURL(urlStr string) error
+}
+
+// Super Manifest structures
+// This is the root manifest that points to all other manifests. In the future, perhaps
+// we should have a data structure above this to manage multiple super manifests? and have
+// this one just represent a single super manifest. All the maps would then move up a level.
 type SuperManifest struct {
 	XMLName                xml.Name                `xml:"super-manifest"`
 	Version                string                  `xml:"version,attr"`
 	BoardManifestList      *BoardManifestList      `xml:"board-manifest-list"`
 	AppManifestList        *AppManifestList        `xml:"app-manifest-list"`
 	MiddlewareManifestList *MiddlewareManifestList `xml:"middleware-manifest-list"`
-	BoardsMap              map[string]*Board
-	AppMap                 map[string]*App
-	MiddlewareMap          map[string]*MiddlewareItem
-	BSPDependenciesMap     map[string]*BSPDependenciesManifest
-	BSPCapabilitiesMap     map[string]*BSPCapabilitiesManifest
+
+	SourceUrls []string `xml:"-"`
+
+	// Following maps are built on demand for quick lookup from their resective lists
+	boardsMap     map[string]*Board
+	appMap        map[string]*App
+	middlewareMap map[string]*MiddlewareItem
+
+	// Following stores downloaded BSP manifests to avoid re-fetching across multiple boards and manifests
+	bspDependenciesMap map[string]*BSPDependenciesManifest
+	bspCapabilitiesMap map[string]*BSPCapabilitiesManifest
+}
+
+func NewSuperManifest() SuperManifestIF {
+	ret := &SuperManifest{
+		BoardManifestList:      &BoardManifestList{},
+		AppManifestList:        &AppManifestList{},
+		MiddlewareManifestList: &MiddlewareManifestList{},
+		bspDependenciesMap:     make(map[string]*BSPDependenciesManifest),
+		bspCapabilitiesMap:     make(map[string]*BSPCapabilitiesManifest),
+	}
+	ret.clearMaps()
+	return ret
+}
+
+// Maps are cleared when manifests are merged or modified so that they can be rebuilt on demand
+func (sm *SuperManifest) clearMaps() {
+	sm.boardsMap = make(map[string]*Board)
+	sm.appMap = make(map[string]*App)
+	sm.middlewareMap = make(map[string]*MiddlewareItem)
 }
 
 type BoardManifestList struct {
@@ -291,63 +343,63 @@ func ReadDependenciesManifest(xmlData []byte) (*Dependencies, error) {
 }
 
 func (manifest *SuperManifest) GetBoardsMap() *map[string]*Board {
-	if (manifest.BoardsMap != nil) && (len(manifest.BoardsMap) > 0) {
-		return &manifest.BoardsMap
+	if (manifest.boardsMap != nil) && (len(manifest.boardsMap) > 0) {
+		return &manifest.boardsMap
 	}
-	manifest.BoardsMap = make(map[string]*Board)
+	manifest.boardsMap = make(map[string]*Board)
 	for _, bm := range manifest.BoardManifestList.BoardManifest {
 		if bm.Boards != nil {
 			for _, board := range bm.Boards.Boards {
 				board.Origin = bm
-				manifest.BoardsMap[board.ID] = &board
+				manifest.boardsMap[board.ID] = &board
 			}
 		}
 	}
-	return &manifest.BoardsMap
+	return &manifest.boardsMap
 }
 
 func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
-	if (manifest.AppMap != nil) && (len(manifest.AppMap) > 0) {
-		return &manifest.AppMap
+	if (manifest.appMap != nil) && (len(manifest.appMap) > 0) {
+		return &manifest.appMap
 	}
-	manifest.AppMap = make(map[string]*App)
+	manifest.appMap = make(map[string]*App)
 	for _, am := range manifest.AppManifestList.AppManifest {
 		if am.Apps != nil {
 			for _, app := range am.Apps.App {
 				app.Origin = am
-				manifest.AppMap[app.ID] = &app
+				manifest.appMap[app.ID] = &app
 			}
 		}
 	}
-	return &manifest.AppMap
+	return &manifest.appMap
 }
 
 func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
-	if (manifest.MiddlewareMap != nil) && (len(manifest.MiddlewareMap) > 0) {
-		return &manifest.MiddlewareMap
+	if (manifest.middlewareMap != nil) && (len(manifest.middlewareMap) > 0) {
+		return &manifest.middlewareMap
 	}
-	manifest.MiddlewareMap = make(map[string]*MiddlewareItem)
+	manifest.middlewareMap = make(map[string]*MiddlewareItem)
 	for _, mm := range manifest.MiddlewareManifestList.MiddlewareManifest {
 		if mm.Middlewares != nil {
 			for _, item := range mm.Middlewares.Middlewares {
 				item.Origin = mm
-				manifest.MiddlewareMap[item.ID] = item
+				manifest.middlewareMap[item.ID] = item
 			}
 		}
 	}
-	return &manifest.MiddlewareMap
+	return &manifest.middlewareMap
 }
 
 func (sm *SuperManifest) GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error) {
 	if (urlStr == "") || (urlStr == "N/A") {
 		return nil, nil
 	}
-	ret := sm.BSPDependenciesMap[urlStr]
+	ret := sm.bspDependenciesMap[urlStr]
 	if ret != nil {
 		return ret, nil
 	}
-	if sm.BSPDependenciesMap == nil {
-		sm.BSPDependenciesMap = make(map[string]*BSPDependenciesManifest)
+	if sm.bspDependenciesMap == nil {
+		sm.bspDependenciesMap = make(map[string]*BSPDependenciesManifest)
 	}
 	mC := NewManifestDefaultCache()
 	data, err := mC.Get(urlStr)
@@ -358,17 +410,17 @@ func (sm *SuperManifest) GetBSPDependenciesManifest(urlStr string) (*BSPDependen
 	if err != nil {
 		return nil, err
 	}
-	sm.BSPDependenciesMap[urlStr] = depManifest
+	sm.bspDependenciesMap[urlStr] = depManifest
 	return depManifest, nil
 }
 
 func (sm *SuperManifest) GetBSPCapabilitiesManifest(urlStr string) (*BSPCapabilitiesManifest, error) {
-	ret := sm.BSPCapabilitiesMap[urlStr]
+	ret := sm.bspCapabilitiesMap[urlStr]
 	if ret != nil {
 		return ret, nil
 	}
-	if sm.BSPCapabilitiesMap == nil {
-		sm.BSPCapabilitiesMap = make(map[string]*BSPCapabilitiesManifest)
+	if sm.bspCapabilitiesMap == nil {
+		sm.bspCapabilitiesMap = make(map[string]*BSPCapabilitiesManifest)
 	}
 	mC := NewManifestDefaultCache()
 	data, err := mC.Get(urlStr)
@@ -379,7 +431,7 @@ func (sm *SuperManifest) GetBSPCapabilitiesManifest(urlStr string) (*BSPCapabili
 	if err != nil {
 		return nil, err
 	}
-	sm.BSPCapabilitiesMap[urlStr] = depManifest
+	sm.bspCapabilitiesMap[urlStr] = depManifest
 	return depManifest, nil
 }
 
@@ -394,7 +446,7 @@ func (sm *SuperManifest) GetBSPDependencies(urlStr string, bspId string) (*BSPDe
 	return depManifest.GetBSP(bspId), nil
 }
 
-func IngestManifestTree(urlStr string) (*SuperManifest, error) {
+func IngestManifestTree(urlStr string) (SuperManifestIF, error) {
 	// Example usage of fetching and reading the super manifest
 	urlFetcher := NewManifestFetcher(runtime.NumCPU())
 	if urlStr == "" {
@@ -410,6 +462,8 @@ func IngestManifestTree(urlStr string) (*SuperManifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse super manifest %s: %v", urlStr, err)
 	}
+	superManifest.SourceUrls = append(superManifest.SourceUrls, urlStr)
+	superManifest.clearMaps()
 	logger.Infof("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
 
 	urls := []FetchUrlWithCb{}
@@ -480,4 +534,38 @@ func UnmarshalManifest[T any](data []byte, err error, parseFunc func([]byte) (*T
 		return nil, fmt.Errorf("failed to parse manifest: %v", err)
 	}
 	return manifest, nil
+}
+
+func (sm *SuperManifest) AddSuperManifest(other *SuperManifest) {
+	if (sm.Version != other.Version) && (other.Version != "") {
+		// Should we error out instead?
+		logger.Warningf("Merging super manifests with different versions: %s vs %s\n", sm.Version, other.Version)
+	}
+	sm.SourceUrls = append(sm.SourceUrls, other.SourceUrls...)
+	// Merge Board Manifests
+	sm.BoardManifestList.BoardManifest = append(sm.BoardManifestList.BoardManifest, other.BoardManifestList.BoardManifest...)
+	// Merge App Manifests
+	sm.AppManifestList.AppManifest = append(sm.AppManifestList.AppManifest, other.AppManifestList.AppManifest...)
+	// Merge Middleware Manifests
+	sm.MiddlewareManifestList.MiddlewareManifest = append(sm.MiddlewareManifestList.MiddlewareManifest, other.MiddlewareManifestList.MiddlewareManifest...)
+	for k, v := range other.bspDependenciesMap {
+		sm.bspDependenciesMap[k] = v
+	}
+	for k, v := range other.bspCapabilitiesMap {
+		sm.bspCapabilitiesMap[k] = v
+	}
+	// Following maps will be rebuilt on demand. So, clear them instead of merging
+	sm.clearMaps()
+}
+
+func (sm *SuperManifest) AddSuperManifestFromURL(urlStr string) error {
+	otherManifest, err := IngestManifestTree(urlStr)
+	if err != nil {
+		return err
+	}
+	// Type assert to concrete type for internal merge operation
+	if otherConcrete, ok := otherManifest.(*SuperManifest); ok {
+		sm.AddSuperManifest(otherConcrete)
+	}
+	return nil
 }
