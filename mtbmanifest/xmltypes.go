@@ -55,11 +55,29 @@ type SuperManifestIF interface {
 	// GetBoardsMap returns a map of all boards indexed by their ID
 	GetBoardsMap() *map[string]*Board
 
+	// Get list of board IDs. Order is according to manifest listing.
+	GetBoardIDs() []string
+
+	// GetBoard retrieves a specific board by its ID
+	GetBoard(boardID string) (*Board, bool)
+
 	// GetAppsMap returns a map of all apps indexed by their ID
 	GetAppsMap() *map[string]*App
 
+	// Get list of app IDs. Order is according to manifest listing.
+	GetAppIDs() []string
+
+	// GetApp retrieves a specific app by its ID
+	GetApp(appID string) (*App, bool)
+
 	// GetMiddlewareMap returns a map of all middleware items indexed by their ID
 	GetMiddlewareMap() *map[string]*MiddlewareItem
+
+	// Get list of middleware IDs. Order is according to manifest listing.
+	GetMiddlewareIDs() []string
+
+	// GetMiddleware retrieves a specific middleware item by its ID
+	GetMiddleware(middlewareID string) (*MiddlewareItem, bool)
 
 	// GetBSPDependenciesManifest fetches and caches the BSP dependencies manifest from the given URL
 	GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error)
@@ -87,7 +105,7 @@ type SuperManifest struct {
 
 	SourceUrls []string `xml:"-"`
 
-	// Following maps are built on demand for quick lookup from their resective lists
+	// Following maps are built on demand for quick lookup from their respective lists
 	boardsMap     map[string]*Board
 	appMap        map[string]*App
 	middlewareMap map[string]*MiddlewareItem
@@ -97,6 +115,7 @@ type SuperManifest struct {
 	bspCapabilitiesMap map[string]*BSPCapabilitiesManifest
 }
 
+// NewSuperManifest creates an empty SuperManifest ready to be populated.
 func NewSuperManifest() SuperManifestIF {
 	ret := &SuperManifest{
 		BoardManifestList:      &BoardManifestList{},
@@ -107,6 +126,87 @@ func NewSuperManifest() SuperManifestIF {
 	}
 	ret.clearMaps()
 	return ret
+}
+
+// NewSuperManifestFromURL fetches and ingests a complete super manifest tree from the given URL.
+// If urlStr is empty, it uses the default SuperManifestURL.
+// This constructor fetches all board, app, and middleware manifests concurrently.
+func NewSuperManifestFromURL(urlStr string) (SuperManifestIF, error) {
+	urlFetcher := NewManifestFetcher(runtime.NumCPU())
+	if urlStr == "" {
+		urlStr = SuperManifestURL
+	}
+
+	logger.Infof("Fetching super manifest...%s\n", urlStr)
+	superData, err := urlFetcher.Cache.Get(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch super manifest %s: %v", urlStr, err)
+	}
+	superManifest, err := UnmarshalManifest(superData, err, ReadSuperManifest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse super manifest %s: %v", urlStr, err)
+	}
+	superManifest.SourceUrls = append(superManifest.SourceUrls, urlStr)
+	superManifest.clearMaps()
+	logger.Infof("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
+
+	urls := []FetchUrlWithCb{}
+	var mu sync.Mutex
+	for ix, mManifest := range superManifest.BoardManifestList.BoardManifest {
+		item := FetchUrlWithCb{
+			Url: mManifest.URI, Index: ix,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				logger.Infof("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				boards, err := UnmarshalManifest(data, err, ReadBoardManifest)
+				if err != nil {
+					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					superManifest.BoardManifestList.BoardManifest[index].Boards = boards
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+
+	for ix, aManifest := range superManifest.AppManifestList.AppManifest {
+		item := FetchUrlWithCb{
+			Url: aManifest.URI, Index: ix,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				logger.Infof("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				app, err := UnmarshalManifest(data, err, ReadAppsManifest)
+				if err != nil {
+					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					superManifest.AppManifestList.AppManifest[index].Apps = app
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+	for ix, mManifest := range superManifest.MiddlewareManifestList.MiddlewareManifest {
+		item := FetchUrlWithCb{
+			Url: mManifest.URI, Index: ix,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				logger.Infof("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				middleware, err := UnmarshalManifest(data, err, ReadMiddlewareManifest)
+				if err != nil {
+					logger.Errorf("Error fetching file %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					superManifest.MiddlewareManifestList.MiddlewareManifest[index].Middlewares = middleware
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+
+	urlFetcher.FetchAllWithCb(urls)
+	return superManifest, err
 }
 
 // Maps are cleared when manifests are merged or modified so that they can be rebuilt on demand
@@ -358,6 +458,25 @@ func (manifest *SuperManifest) GetBoardsMap() *map[string]*Board {
 	return &manifest.boardsMap
 }
 
+func (manifest *SuperManifest) GetBoardIDs() []string {
+	boardIDs := []string{}
+	for _, bm := range manifest.BoardManifestList.BoardManifest {
+		if bm.Boards == nil {
+			continue
+		}
+		for _, board := range bm.Boards.Boards {
+			boardIDs = append(boardIDs, board.ID)
+		}
+	}
+	return boardIDs
+}
+
+func (manifest *SuperManifest) GetBoard(boardID string) (*Board, bool) {
+	boardsMap := manifest.GetBoardsMap()
+	board, exists := (*boardsMap)[boardID]
+	return board, exists
+}
+
 func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
 	if (manifest.appMap != nil) && (len(manifest.appMap) > 0) {
 		return &manifest.appMap
@@ -374,6 +493,25 @@ func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
 	return &manifest.appMap
 }
 
+func (manifest *SuperManifest) GetAppIDs() []string {
+	appIDs := []string{}
+	for _, am := range manifest.AppManifestList.AppManifest {
+		if am.Apps == nil {
+			continue
+		}
+		for _, app := range am.Apps.App {
+			appIDs = append(appIDs, app.ID)
+		}
+	}
+	return appIDs
+}
+
+func (manifest *SuperManifest) GetApp(appID string) (*App, bool) {
+	appsMap := manifest.GetAppsMap()
+	app, exists := (*appsMap)[appID]
+	return app, exists
+}
+
 func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
 	if (manifest.middlewareMap != nil) && (len(manifest.middlewareMap) > 0) {
 		return &manifest.middlewareMap
@@ -388,6 +526,25 @@ func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
 		}
 	}
 	return &manifest.middlewareMap
+}
+
+func (manifest *SuperManifest) GetMiddlewareIDs() []string {
+	middlewareIDs := []string{}
+	for _, mm := range manifest.MiddlewareManifestList.MiddlewareManifest {
+		if mm.Middlewares == nil {
+			continue
+		}
+		for _, item := range mm.Middlewares.Middlewares {
+			middlewareIDs = append(middlewareIDs, item.ID)
+		}
+	}
+	return middlewareIDs
+}
+
+func (manifest *SuperManifest) GetMiddleware(middlewareID string) (*MiddlewareItem, bool) {
+	middlewareMap := manifest.GetMiddlewareMap()
+	item, exists := (*middlewareMap)[middlewareID]
+	return item, exists
 }
 
 func (sm *SuperManifest) GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error) {
@@ -446,85 +603,6 @@ func (sm *SuperManifest) GetBSPDependencies(urlStr string, bspId string) (*BSPDe
 	return depManifest.GetBSP(bspId), nil
 }
 
-func IngestManifestTree(urlStr string) (SuperManifestIF, error) {
-	// Example usage of fetching and reading the super manifest
-	urlFetcher := NewManifestFetcher(runtime.NumCPU())
-	if urlStr == "" {
-		urlStr = SuperManifestURL
-	}
-
-	logger.Infof("Fetching super manifest...%s\n", urlStr)
-	superData, err := urlFetcher.Cache.Get(urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch super manifest %s: %v", urlStr, err)
-	}
-	superManifest, err := UnmarshalManifest(superData, err, ReadSuperManifest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse super manifest %s: %v", urlStr, err)
-	}
-	superManifest.SourceUrls = append(superManifest.SourceUrls, urlStr)
-	superManifest.clearMaps()
-	logger.Infof("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
-
-	urls := []FetchUrlWithCb{}
-	var mu sync.Mutex
-	for ix, mManifest := range superManifest.BoardManifestList.BoardManifest {
-		item := FetchUrlWithCb{
-			Url: mManifest.URI, Index: ix,
-			Callback: func(urlStr string, data []byte, err error, index int) {
-				logger.Infof("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				boards, err := UnmarshalManifest(data, err, ReadBoardManifest)
-				if err != nil {
-					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
-				} else {
-					mu.Lock()
-					superManifest.BoardManifestList.BoardManifest[index].Boards = boards
-					mu.Unlock()
-				}
-			},
-		}
-		urls = append(urls, item)
-	}
-
-	for ix, aManifest := range superManifest.AppManifestList.AppManifest {
-		item := FetchUrlWithCb{
-			Url: aManifest.URI, Index: ix,
-			Callback: func(urlStr string, data []byte, err error, index int) {
-				logger.Infof("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				app, err := UnmarshalManifest(data, err, ReadAppsManifest)
-				if err != nil {
-					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
-				} else {
-					mu.Lock()
-					superManifest.AppManifestList.AppManifest[index].Apps = app
-					mu.Unlock()
-				}
-			},
-		}
-		urls = append(urls, item)
-	}
-	for ix, mManifest := range superManifest.MiddlewareManifestList.MiddlewareManifest {
-		item := FetchUrlWithCb{
-			Url: mManifest.URI, Index: ix,
-			Callback: func(urlStr string, data []byte, err error, index int) {
-				logger.Infof("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
-				middleware, err := UnmarshalManifest(data, err, ReadMiddlewareManifest)
-				if err != nil {
-					logger.Errorf("Error fetching file %s: %v\n", urlStr, err)
-				} else {
-					mu.Lock()
-					superManifest.MiddlewareManifestList.MiddlewareManifest[index].Middlewares = middleware
-					mu.Unlock()
-				}
-			},
-		}
-		urls = append(urls, item)
-	}
-
-	urlFetcher.FetchAllWithCb(urls)
-	return superManifest, err
-}
-
 func UnmarshalManifest[T any](data []byte, err error, parseFunc func([]byte) (*T, error)) (*T, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch manifest: %v", err)
@@ -559,7 +637,7 @@ func (sm *SuperManifest) AddSuperManifest(other *SuperManifest) {
 }
 
 func (sm *SuperManifest) AddSuperManifestFromURL(urlStr string) error {
-	otherManifest, err := IngestManifestTree(urlStr)
+	otherManifest, err := NewSuperManifestFromURL(urlStr)
 	if err != nil {
 		return err
 	}
