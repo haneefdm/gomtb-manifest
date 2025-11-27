@@ -75,20 +75,45 @@ func doMain() {
 		return
 	}
 	fmt.Printf("Finished ingesting super manifest in %d ms\n", timer.ElapsedMs())
-	count := 1
-	for id, board := range *superManifest.GetBoardsMap() {
-		fmt.Printf("%3d. Board ID: %-20s, MCUs:%v\n", count, id, board.Chips.MCU)
-		count++
+	if false {
+		for _, manifest := range superManifest.BoardManifestList.BoardManifest {
+			if manifest.DependencyURL != "" || manifest.CapabilityURL != "" {
+				fmt.Printf("Board manifest URL: %s\n", manifest.URI)
+			}
+			if manifest.DependencyURL != "" {
+				fmt.Printf("    Dependency URL: %s\n", manifest.DependencyURL)
+			}
+			if manifest.CapabilityURL != "" {
+				fmt.Printf("    Capability URL: %s\n", manifest.CapabilityURL)
+			}
+		}
+		count := 1
+		for id, board := range *superManifest.GetBoardsMap() {
+			fmt.Printf("%3d. Board ID: %-20s, MCUs:%v\n", count, id, board.Chips.MCU)
+			count++
+		}
+		count = 1
+		for id, app := range *superManifest.GetAppsMap() {
+			fmt.Printf("%3d. App ID: %-20s, Versions:%d\n", count, id, len(app.Versions.Version))
+			count++
+		}
+		count = 1
+		for id, mw := range *superManifest.GetMiddlewareMap() {
+			fmt.Printf("%3d. MW ID: %-20s, Capabilities: %v\n", count, id, mw.ReqCapabilitiesV2)
+			count++
+		}
 	}
-	count = 1
-	for id, app := range *superManifest.GetAppsMap() {
-		fmt.Printf("%3d. App ID: %-20s, Versions:%d\n", count, id, len(app.Versions.Version))
-		count++
-	}
-	count = 1
-	for id, mw := range *superManifest.GetMiddlewareMap() {
-		fmt.Printf("%3d. MW ID: %-20s, Capabilities: %v\n", count, id, mw.ReqCapabilitiesV2)
-		count++
+
+	name := "KIT_PSE84_EVAL_EPC2"
+	board := (*superManifest.GetBoardsMap())[name]
+	if board != nil {
+		board.BSPDependencies, _ = superManifest.GetBSPDependencies(board.Origin.DependencyURL, board.ID)
+		board.BSPCapabilities, _ = superManifest.GetBSPCapabilitiesManifest(board.Origin.CapabilityURL)
+		fmt.Printf("Found board %s:\n", name)
+		jsonData, _ := json.MarshalIndent(board, "", "  ")
+		fmt.Printf("  Description:\n%s\n", jsonData)
+	} else {
+		fmt.Printf("Error: Board %s not found\n", name)
 	}
 	os.Exit(0)
 
@@ -103,7 +128,7 @@ func doMain() {
 func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
 	// Example usage of fetching and reading the super manifest
 	fmt.Println("Fetching super manifest...")
-	urlFetcher := NewManifestFetcher(runtime.NumCPU())
+	urlFetcher := mtbmanifest.NewManifestFetcher(runtime.NumCPU())
 
 	superData, err := urlFetcher.Cache.Get(SuperManifestURL)
 	if err != nil {
@@ -115,10 +140,10 @@ func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
 	}
 	fmt.Printf("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
 
-	urls := []FetchUrlWithCb{}
+	urls := []mtbmanifest.FetchUrlWithCb{}
 	var mu sync.Mutex
 	for ix, mManifest := range superManifest.BoardManifestList.BoardManifest {
-		item := FetchUrlWithCb{
+		item := mtbmanifest.FetchUrlWithCb{
 			Url: mManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
 				fmt.Printf("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
@@ -136,7 +161,7 @@ func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
 	}
 
 	for ix, aManifest := range superManifest.AppManifestList.AppManifest {
-		item := FetchUrlWithCb{
+		item := mtbmanifest.FetchUrlWithCb{
 			Url: aManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
 				fmt.Printf("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
@@ -153,7 +178,7 @@ func ingestManifestTree() (*mtbmanifest.SuperManifest, error) {
 		urls = append(urls, item)
 	}
 	for ix, mManifest := range superManifest.MiddlewareManifestList.MiddlewareManifest {
-		item := FetchUrlWithCb{
+		item := mtbmanifest.FetchUrlWithCb{
 			Url: mManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
 				fmt.Printf("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)

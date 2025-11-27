@@ -10,19 +10,21 @@ import (
 // This is the root manifest that points to all other manifests
 
 type SuperManifest struct {
-	XMLName                xml.Name               `xml:"super-manifest"`
-	Version                string                 `xml:"version,attr"`
-	BoardManifestList      BoardManifestList      `xml:"board-manifest-list"`
-	AppManifestList        AppManifestList        `xml:"app-manifest-list"`
-	MiddlewareManifestList MiddlewareManifestList `xml:"middleware-manifest-list"`
+	XMLName                xml.Name                `xml:"super-manifest"`
+	Version                string                  `xml:"version,attr"`
+	BoardManifestList      *BoardManifestList      `xml:"board-manifest-list"`
+	AppManifestList        *AppManifestList        `xml:"app-manifest-list"`
+	MiddlewareManifestList *MiddlewareManifestList `xml:"middleware-manifest-list"`
 	BoardsMap              map[string]*Board
 	AppMap                 map[string]*App
 	MiddlewareMap          map[string]*MiddlewareItem
+	BSPDependenciesMap     map[string]*BSPDependenciesManifest
+	BSPCapabilitiesMap     map[string]*BSPCapabilitiesManifest
 }
 
 type BoardManifestList struct {
-	XMLName       xml.Name        `xml:"board-manifest-list"`
-	BoardManifest []BoardManifest `xml:"board-manifest"`
+	XMLName       xml.Name         `xml:"board-manifest-list"`
+	BoardManifest []*BoardManifest `xml:"board-manifest"`
 }
 
 type BoardManifest struct {
@@ -34,8 +36,8 @@ type BoardManifest struct {
 }
 
 type AppManifestList struct {
-	XMLName     xml.Name      `xml:"app-manifest-list"`
-	AppManifest []AppManifest `xml:"app-manifest"`
+	XMLName     xml.Name       `xml:"app-manifest-list"`
+	AppManifest []*AppManifest `xml:"app-manifest"`
 }
 
 type AppManifest struct {
@@ -45,8 +47,8 @@ type AppManifest struct {
 }
 
 type MiddlewareManifestList struct {
-	XMLName            xml.Name             `xml:"middleware-manifest-list"`
-	MiddlewareManifest []MiddlewareManifest `xml:"middleware-manifest"`
+	XMLName            xml.Name              `xml:"middleware-manifest-list"`
+	MiddlewareManifest []*MiddlewareManifest `xml:"middleware-manifest"`
 }
 
 type MiddlewareManifest struct {
@@ -62,18 +64,23 @@ type Boards struct {
 }
 
 type Board struct {
-	XMLName          xml.Name      `xml:"board"`
-	ID               string        `xml:"id"`
-	Category         string        `xml:"category"`
-	BoardURI         string        `xml:"board_uri"`
-	Chips            Chips         `xml:"chips"`
-	Name             string        `xml:"name"`
-	Summary          string        `xml:"summary"`
-	ProvCapabilities string        `xml:"prov_capabilities"`
-	Description      string        `xml:"description"`
-	DocumentationURL string        `xml:"documentation_url"`
-	Versions         BoardVersions `xml:"versions"`
-	DefaultLocation  string        `xml:"default_location,attr,omitempty"`
+	XMLName          xml.Name       `xml:"board"`
+	ID               string         `xml:"id"`
+	Category         string         `xml:"category"`
+	BoardURI         string         `xml:"board_uri"`
+	Chips            Chips          `xml:"chips"`
+	Name             string         `xml:"name"`
+	Summary          string         `xml:"summary"`
+	ProvCapabilities string         `xml:"prov_capabilities"`
+	Description      string         `xml:"description"`
+	DocumentationURL string         `xml:"documentation_url"`
+	Versions         *BoardVersions `xml:"versions"`
+	DefaultLocation  string         `xml:"default_location,attr,omitempty"`
+
+	//lint:ignore SA5008 Static checker false positive
+	Origin          *BoardManifest `json:"-" xml:"-"`
+	BSPDependencies *BSPDepender
+	BSPCapabilities *BSPCapabilitiesManifest
 }
 
 type Chips struct {
@@ -83,8 +90,8 @@ type Chips struct {
 }
 
 type BoardVersions struct {
-	XMLName  xml.Name       `xml:"versions"`
-	Versions []BoardVersion `xml:"version"`
+	XMLName  xml.Name        `xml:"versions"`
+	Versions []*BoardVersion `xml:"version"`
 }
 
 type BoardVersion struct {
@@ -97,29 +104,31 @@ type BoardVersion struct {
 
 // Middleware is the root element
 type Middleware struct {
-	XMLName     xml.Name         `xml:"middleware"`
-	Middlewares []MiddlewareItem `xml:"middleware"`
+	XMLName     xml.Name          `xml:"middleware"`
+	Middlewares []*MiddlewareItem `xml:"middleware"`
 }
 
 // MiddlewareItem represents a single middleware entry
 type MiddlewareItem struct {
-	XMLName           xml.Name   `xml:"middleware"`
-	Type              string     `xml:"type,attr,omitempty"`
-	Hidden            string     `xml:"hidden,attr,omitempty"`
-	ReqCapabilitiesV2 string     `xml:"req_capabilities_v2,attr,omitempty"`
-	Name              string     `xml:"n"`
-	ID                string     `xml:"id"`
-	URI               string     `xml:"uri"`
-	Description       string     `xml:"desc"`
-	Category          string     `xml:"category"`
-	ReqCapabilities   string     `xml:"req_capabilities"`
-	Versions          MWVersions `xml:"versions"`
+	XMLName           xml.Name    `xml:"middleware"`
+	Type              string      `xml:"type,attr,omitempty"`
+	Hidden            string      `xml:"hidden,attr,omitempty"`
+	ReqCapabilitiesV2 string      `xml:"req_capabilities_v2,attr,omitempty"`
+	Name              string      `xml:"n"`
+	ID                string      `xml:"id"`
+	URI               string      `xml:"uri"`
+	Description       string      `xml:"desc"`
+	Category          string      `xml:"category"`
+	ReqCapabilities   string      `xml:"req_capabilities"`
+	Versions          *MWVersions `xml:"versions"`
+	//lint:ignore SA5008 Static checker false positive
+	Origin *MiddlewareManifest `json:"-" xml:"-"`
 }
 
 // Versions contains a list of version entries
 type MWVersions struct {
-	XMLName xml.Name    `xml:"versions"`
-	Version []MWVersion `xml:"version"`
+	XMLName xml.Name     `xml:"versions"`
+	Version []*MWVersion `xml:"version"`
 }
 
 // Version represents a single version entry
@@ -134,35 +143,35 @@ type MWVersion struct {
 
 // Dependencies is the root element
 type Dependencies struct {
-	XMLName  xml.Name   `xml:"dependencies"`
-	Version  string     `xml:"version,attr"`
-	Depender []Depender `xml:"depender"`
+	XMLName  xml.Name    `xml:"dependencies"`
+	Version  string      `xml:"version,attr"`
+	Depender []*Depender `xml:"depender"`
 }
 
 // Depender represents a BSP that has dependencies
 type Depender struct {
-	XMLName  xml.Name           `xml:"depender"`
-	ID       string             `xml:"id"`
-	Versions DependencyVersions `xml:"versions"`
+	XMLName  xml.Name            `xml:"depender"`
+	ID       string              `xml:"id"`
+	Versions *DependencyVersions `xml:"versions"`
 }
 
 // DependencyVersions contains version-specific dependency information
 type DependencyVersions struct {
-	XMLName xml.Name            `xml:"versions"`
-	Version []DependencyVersion `xml:"version"`
+	XMLName xml.Name             `xml:"versions"`
+	Version []*DependencyVersion `xml:"version"`
 }
 
 // DependencyVersion represents dependencies for a specific version
 type DependencyVersion struct {
-	XMLName   xml.Name  `xml:"version"`
-	Commit    string    `xml:"commit"`
-	Dependees Dependees `xml:"dependees"`
+	XMLName   xml.Name   `xml:"version"`
+	Commit    string     `xml:"commit"`
+	Dependees *Dependees `xml:"dependees"`
 }
 
 // Dependees is a container for all the dependencies
 type Dependees struct {
-	XMLName  xml.Name   `xml:"dependees"`
-	Dependee []Dependee `xml:"dependee"`
+	XMLName  xml.Name    `xml:"dependees"`
+	Dependee []*Dependee `xml:"dependee"`
 }
 
 // Dependee represents a single dependency (library/middleware)
@@ -174,7 +183,7 @@ type Dependee struct {
 
 // CapabilitiesManifest is the root structure
 type CapabilitiesManifest struct {
-	Capabilities []Capability `json:"capabilities"`
+	Capabilities []*Capability `json:"capabilities"`
 }
 
 // Capability represents a single capability entry
@@ -185,45 +194,6 @@ type Capability struct {
 	Token       string   `json:"token"`
 	Types       []string `json:"types"`
 }
-
-/*
-// Code Example Manifest structures
-// Handles both mtb-ce-manifest.xml and mtb-ce-manifest-fv2.xml
-type CEApps struct {
-	XMLName xml.Name `xml:"apps"`
-	Version string   `xml:"version,attr,omitempty"` // Only in v2 (fv2)
-	App     []CEApp  `xml:"app"`
-}
-
-type CEApp struct {
-	XMLName           xml.Name   `xml:"app"`
-	Keywords          string     `xml:"keywords,attr,omitempty"`            // v2 only
-	ReqCapabilities   string     `xml:"req_capabilities,attr,omitempty"`    // v1: space-delimited string
-	ReqCapabilitiesV2 string     `xml:"req_capabilities_v2,attr,omitempty"` // v2: bracketed syntax like "[psoc6,wifi] [std_crypto]"
-	Name              string     `xml:"n"`
-	ID                string     `xml:"id"`
-	Category          string     `xml:"category,omitempty"` // v2 only
-	URI               string     `xml:"uri"`
-	Description       string     `xml:"description"`
-	Versions          CEVersions `xml:"versions"`
-}
-
-type CEVersions struct {
-	XMLName xml.Name    `xml:"versions"`
-	Version []CEVersion `xml:"version"`
-}
-
-type CEVersion struct {
-	XMLName                     xml.Name `xml:"version"`
-	FlowVersion                 string   `xml:"flow_version,attr,omitempty"`
-	ToolsMinVersion             string   `xml:"tools_min_version,attr,omitempty"`               // v2
-	ToolsMaxVersion             string   `xml:"tools_max_version,attr,omitempty"`               // v1
-	ReqCapabilitiesPerVersion   string   `xml:"req_capabilities_per_version,attr,omitempty"`    // v1: space-delimited
-	ReqCapabilitiesPerVersionV2 string   `xml:"req_capabilities_per_version_v2,attr,omitempty"` // v2: bracketed syntax
-	Num                         string   `xml:"num"`
-	Commit                      string   `xml:"commit"`
-}
-*/
 
 const printData = false
 
@@ -339,6 +309,7 @@ func (manifest *SuperManifest) GetBoardsMap() *map[string]*Board {
 	for _, bm := range manifest.BoardManifestList.BoardManifest {
 		if bm.Boards != nil {
 			for _, board := range bm.Boards.Boards {
+				board.Origin = bm
 				manifest.BoardsMap[board.ID] = &board
 			}
 		}
@@ -354,6 +325,7 @@ func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
 	for _, am := range manifest.AppManifestList.AppManifest {
 		if am.Apps != nil {
 			for _, app := range am.Apps.App {
+				app.Origin = am
 				manifest.AppMap[app.ID] = &app
 			}
 		}
@@ -369,7 +341,8 @@ func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
 	for _, mm := range manifest.MiddlewareManifestList.MiddlewareManifest {
 		if mm.Middlewares != nil {
 			for _, item := range mm.Middlewares.Middlewares {
-				manifest.MiddlewareMap[item.ID] = &item
+				item.Origin = mm
+				manifest.MiddlewareMap[item.ID] = item
 			}
 		}
 	}
@@ -418,3 +391,59 @@ func ReadCEManifest(xmlData []byte) (CEApps, error) {
 	return ceApps, nil
 }
 */
+
+func (sm *SuperManifest) GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error) {
+	if (urlStr == "") || (urlStr == "N/A") {
+		return nil, nil
+	}
+	ret := sm.BSPDependenciesMap[urlStr]
+	if ret != nil {
+		return ret, nil
+	}
+	if sm.BSPDependenciesMap == nil {
+		sm.BSPDependenciesMap = make(map[string]*BSPDependenciesManifest)
+	}
+	mC := NewManifestDefaultCache()
+	data, err := mC.Get(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	depManifest, err := ReadBSPDependenciesManifest(data)
+	if err != nil {
+		return nil, err
+	}
+	sm.BSPDependenciesMap[urlStr] = depManifest
+	return depManifest, nil
+}
+
+func (sm *SuperManifest) GetBSPCapabilitiesManifest(urlStr string) (*BSPCapabilitiesManifest, error) {
+	ret := sm.BSPCapabilitiesMap[urlStr]
+	if ret != nil {
+		return ret, nil
+	}
+	if sm.BSPCapabilitiesMap == nil {
+		sm.BSPCapabilitiesMap = make(map[string]*BSPCapabilitiesManifest)
+	}
+	mC := NewManifestDefaultCache()
+	data, err := mC.Get(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	depManifest, err := ReadBSPCapabilitiesManifest(data)
+	if err != nil {
+		return nil, err
+	}
+	sm.BSPCapabilitiesMap[urlStr] = depManifest
+	return depManifest, nil
+}
+
+func (sm *SuperManifest) GetBSPDependencies(urlStr string, bspId string) (*BSPDepender, error) {
+	if (bspId == "") || (bspId == "N/A" || (urlStr == "") || (urlStr == "N/A")) {
+		return nil, nil
+	}
+	depManifest, err := sm.GetBSPDependenciesManifest(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	return depManifest.GetBSP(bspId), nil
+}

@@ -1,4 +1,4 @@
-package main
+package mtbmanifest
 
 import (
 	"bytes"
@@ -59,6 +59,9 @@ func NewManifestCache(cacheDir string, ttl time.Duration) *ManifestCache {
 		home, _ := os.UserHomeDir()
 		cacheDir = filepath.Join(home, ".modustoolbox", "mtbmcp", "manifests")
 	}
+	if ttl <= 0 {
+		ttl = defaultTTL
+	}
 
 	c := &ManifestCache{
 		cacheDir:     cacheDir,
@@ -70,6 +73,10 @@ func NewManifestCache(cacheDir string, ttl time.Duration) *ManifestCache {
 	go c.refreshWorker()
 
 	return c
+}
+
+func NewManifestDefaultCache() *ManifestCache {
+	return NewManifestCache("", 0)
 }
 
 // Call this when your program is shutting down

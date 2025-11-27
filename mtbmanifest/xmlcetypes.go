@@ -25,6 +25,8 @@ type App struct {
 	URI               string     `xml:"uri"`
 	Description       string     `xml:"description"`
 	Versions          CEVersions `xml:"versions"`
+	//lint:ignore SA5008 Static checker false positive
+	Origin *AppManifest `json:"-" xml:"-"`
 }
 
 type CEVersions struct {
