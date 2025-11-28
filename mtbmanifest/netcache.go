@@ -3,6 +3,7 @@ package mtbmanifest
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -43,8 +44,11 @@ type ManifestCache struct {
 	ttl      time.Duration
 
 	// Background refresh tracking
+	ctx          context.Context
+	cancel       context.CancelFunc
 	refreshQueue chan string
 	refreshing   sync.Map // track URLs being refreshed
+	closeOnce    sync.Once
 }
 
 const (
@@ -62,9 +66,12 @@ func NewManifestCache(cacheDir string, ttl time.Duration) *ManifestCache {
 		ttl = defaultTTL
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &ManifestCache{
 		cacheDir:     cacheDir,
 		ttl:          ttl,
+		ctx:          ctx,
+		cancel:       cancel,
 		refreshQueue: make(chan string, 100),
 	}
 
@@ -78,9 +85,14 @@ func NewManifestDefaultCache() *ManifestCache {
 	return NewManifestCache("", 0)
 }
 
-// Call this when your program is shutting down
+// Close gracefully shuts down the background refresh worker.
+// It's safe to call multiple times (idempotent).
+// Should be called with defer in client code: defer cache.Close()
 func (c *ManifestCache) Close() {
-	close(c.refreshQueue)
+	c.closeOnce.Do(func() {
+		c.cancel()            // Signal context cancellation
+		close(c.refreshQueue) // Close the queue channel
+	})
 }
 
 func (c *ManifestCache) Get(urlStr string) ([]byte, error) {
@@ -120,18 +132,29 @@ func (c *ManifestCache) queueRefresh(urlStr string) {
 
 func (c *ManifestCache) refreshWorker() {
 	// Process refresh queue in background
-	for urlStr := range c.refreshQueue {
-		// Refresh this URL
-		_, err := c.fetchAndCache(urlStr)
-		if err != nil {
-			logger.Infof("Background refresh failed for %s: %v", urlStr, err)
+	for {
+		select {
+		case urlStr, ok := <-c.refreshQueue:
+			if !ok {
+				// Channel closed, exit gracefully
+				return
+			}
+			// Refresh this URL
+			_, err := c.fetchAndCache(urlStr)
+			if err != nil {
+				logger.Infof("Background refresh failed for %s: %v", urlStr, err)
+			}
+
+			// Mark as no longer refreshing
+			c.refreshing.Delete(urlStr)
+
+			// Small delay to avoid hammering servers
+			time.Sleep(100 * time.Millisecond)
+
+		case <-c.ctx.Done():
+			// Context cancelled, exit gracefully
+			return
 		}
-
-		// Mark as no longer refreshing
-		c.refreshing.Delete(urlStr)
-
-		// Small delay to avoid hammering servers
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 

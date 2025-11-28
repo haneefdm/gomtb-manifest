@@ -46,10 +46,28 @@ func ExampleNewManifestFetcher_customBoth() {
 	_ = fetcher // Use the fetcher...
 }
 
-// Example 5: Accessing the cache
+// Example 5: Proper cleanup with defer
+// Always use defer to ensure graceful shutdown
+func ExampleManifestFetcher_properCleanup() {
+	fetcher := NewManifestFetcher()
+	defer fetcher.Cache().Close() // Ensures background worker stops gracefully
+
+	// Use the fetcher...
+	data, err := fetcher.Cache().Get("https://example.com/manifest.xml")
+	if err != nil {
+		// Handle error...
+	}
+	_ = data
+
+	// When function exits, Close() is called automatically
+	// Safe to call multiple times - it's idempotent
+}
+
+// Example 6: Accessing the cache
 // The Cache() method provides read-only access to the underlying cache
 func ExampleManifestFetcher_accessCache() {
 	fetcher := NewManifestFetcher()
+	defer fetcher.Cache().Close()
 
 	// Get data through the fetcher
 	data, err := fetcher.Cache().Get("https://example.com/manifest.xml")
@@ -60,9 +78,7 @@ func ExampleManifestFetcher_accessCache() {
 
 	// Clear stale entries
 	_ = fetcher.Cache().ClearStale()
-}
-
-// Why use functional options?
+} // Why use functional options?
 //
 // Benefits:
 // 1. **Backward Compatible**: Adding new options doesn't break existing code
