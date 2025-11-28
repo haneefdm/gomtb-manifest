@@ -91,7 +91,7 @@ func doMain() {
 
 	timer := NewTimer()
 	// For demonstration, we will just ingest the manifest and print the number of boards
-	superManifest, err := mtbmanifest.NewSuperManifestFromUrl("")
+	superManifest, err := mtbmanifest.NewSuperManifestFromURL("")
 	if err != nil {
 		logger.Errorf("Error ingesting manifest: %v\n", err)
 		return

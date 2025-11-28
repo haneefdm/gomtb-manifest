@@ -132,13 +132,13 @@ func NewSuperManifest() SuperManifestIF {
 // If urlStr is empty, it uses the default SuperManifestURL.
 // This constructor fetches all board, app, and middleware manifests concurrently.
 func NewSuperManifestFromURL(urlStr string) (SuperManifestIF, error) {
-	urlFetcher := NewManifestFetcher(runtime.NumCPU())
+	urlFetcher := NewManifestFetcher(WithMaxConcurrent(runtime.NumCPU()))
 	if urlStr == "" {
 		urlStr = SuperManifestURL
 	}
 
 	logger.Infof("Fetching super manifest...%s\n", urlStr)
-	superData, err := urlFetcher.Cache.Get(urlStr)
+	superData, err := urlFetcher.Cache().Get(urlStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch super manifest %s: %v", urlStr, err)
 	}

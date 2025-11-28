@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,7 +34,7 @@ import (
 */
 
 type ManifestFetcher struct {
-	Cache   *ManifestCache
+	cache   *ManifestCache
 	limiter chan struct{} // Rate limit concurrent fetches
 }
 
@@ -125,7 +124,7 @@ func (c *ManifestCache) refreshWorker() {
 		// Refresh this URL
 		_, err := c.fetchAndCache(urlStr)
 		if err != nil {
-			log.Printf("Background refresh failed for %s: %v", urlStr, err)
+			logger.Infof("Background refresh failed for %s: %v", urlStr, err)
 		}
 
 		// Mark as no longer refreshing
@@ -144,7 +143,7 @@ func (c *ManifestCache) fetchAndCache(urlStr string) ([]byte, error) {
 
 	err = c.writeCache(urlStr, data)
 	if err != nil {
-		log.Printf("Warning: failed to write cache for %s: %v", urlStr, err)
+		logger.Warningf("Warning: failed to write cache for %s: %v", urlStr, err)
 	}
 	return data, nil
 }
@@ -193,11 +192,58 @@ func (c *ManifestCache) RefreshAllStale() {
 	}
 }
 
-func NewManifestFetcher(maxConcurrent int) *ManifestFetcher {
-	return &ManifestFetcher{
-		Cache:   NewManifestCache("", defaultTTL),
-		limiter: make(chan struct{}, maxConcurrent), // e.g., 10
+// FetcherOption is a function that configures a ManifestFetcher.
+type FetcherOption func(*ManifestFetcher)
+
+// WithCache sets a custom cache for the fetcher.
+// If not provided, a default cache will be created.
+func WithCache(cache *ManifestCache) FetcherOption {
+	return func(f *ManifestFetcher) {
+		f.cache = cache
 	}
+}
+
+// WithMaxConcurrent sets the maximum number of concurrent fetch operations.
+// Default is runtime.NumCPU().
+func WithMaxConcurrent(maxConcurrent int) FetcherOption {
+	return func(f *ManifestFetcher) {
+		f.limiter = make(chan struct{}, maxConcurrent)
+	}
+}
+
+// NewManifestFetcher creates a new ManifestFetcher with the given options.
+// By default, it uses a default cache and allows runtime.NumCPU() concurrent fetches.
+//
+// Example usage:
+//
+//	// Use defaults
+//	fetcher := NewManifestFetcher()
+//
+//	// Custom concurrency only
+//	fetcher := NewManifestFetcher(WithMaxConcurrent(20))
+//
+//	// Custom cache and concurrency
+//	myCache := NewManifestCache("/my/cache", 7*24*time.Hour)
+//	fetcher := NewManifestFetcher(WithCache(myCache), WithMaxConcurrent(15))
+func NewManifestFetcher(opts ...FetcherOption) *ManifestFetcher {
+	// Set sensible defaults
+	f := &ManifestFetcher{
+		cache:   NewManifestDefaultCache(),
+		limiter: make(chan struct{}, 10), // Conservative default
+	}
+
+	// Apply all provided options
+	for _, opt := range opts {
+		opt(f)
+	}
+
+	return f
+}
+
+// Cache returns the cache used by this fetcher.
+// This provides controlled read-only access to the cache.
+func (f *ManifestFetcher) Cache() *ManifestCache {
+	return f.cache
 }
 
 type FetchUrlWithCb struct {
@@ -231,7 +277,7 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 				}
 			}()
 
-			data, err := f.Cache.Get(item.Url)
+			data, err := f.cache.Get(item.Url)
 			mu.Lock()
 			if err != nil {
 				results[item.Url] = err
@@ -273,7 +319,7 @@ func (f *ManifestFetcher) FetchAll(urls []string) map[string]any {
 			f.limiter <- struct{}{}        // Acquire
 			defer func() { <-f.limiter }() // Release
 
-			data, err := f.Cache.Get(u)
+			data, err := f.cache.Get(u)
 
 			mu.Lock()
 			if err != nil {
