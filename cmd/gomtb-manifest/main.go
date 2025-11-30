@@ -105,10 +105,28 @@ func doMain() {
 		board.BSPDependencies, _ = superManifest.GetBSPDependencies(board.Origin.DependencyURL, board.ID)
 		logger.Infof("Found board %s:\n", name)
 		jsonData, _ := json.MarshalIndent(board, "", "  ")
-		logger.Infof("  Description:\n%s\n", jsonData)
+		_ = os.WriteFile("tmp/board.json", jsonData, 0644)
 		board.BSPCapabilities, _ = superManifest.GetBSPCapabilitiesManifest(board.Origin.CapabilityURL)
+		jsonData, _ = json.MarshalIndent(board.BSPCapabilities, "", "  ")
+		_ = os.WriteFile("tmp/capabilities.json", jsonData, 0644)
 	} else {
 		logger.Errorf("Error: Board %s not found\n", name)
+	}
+	if true {
+		jsonData, _ := json.MarshalIndent(superManifest.GetMiddlewareMap(), "", "  ")
+		_ = os.WriteFile("tmp/middleware.json", jsonData, 0644)
+		mwItems := mtbmanifest.FindMiddlewareForBoard(superManifest, board)
+		logger.Infof("Middleware matched for board %s: %d items\n", name, len(mwItems))
+		mwMapByCategory := make(map[string][]*mtbmanifest.MiddlewareItem)
+		for _, mw := range mwItems {
+			mwMapByCategory[mw.Category] = append(mwMapByCategory[mw.Category], mw)
+		}
+		for category, items := range mwMapByCategory {
+			fmt.Printf("Category: %s\n", category)
+			for _, mw := range items {
+				fmt.Printf("    %s: %s\n", mw.ID, mw.URI)
+			}
+		}
 	}
 	os.Exit(0)
 }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -389,6 +390,46 @@ type Capability struct {
 	Types       []string `json:"types"`
 }
 
+// Code Example Manifest structures
+// Handles both mtb-ce-manifest.xml (v1) and mtb-ce-manifest-fv2.xml (v2)
+
+type Apps struct {
+	XMLName xml.Name `xml:"apps"`
+	Version string   `xml:"version,attr,omitempty"` // Only in v2 (fv2): "2.0"
+	App     []App    `xml:"app"`
+}
+
+type App struct {
+	XMLName           xml.Name   `xml:"app"`
+	Keywords          string     `xml:"keywords,attr,omitempty"`            // v2 only: comma-delimited
+	ReqCapabilities   string     `xml:"req_capabilities,attr,omitempty"`    // v1: space-delimited string
+	ReqCapabilitiesV2 string     `xml:"req_capabilities_v2,attr,omitempty"` // v2: bracketed syntax
+	Name              string     `xml:"n"`
+	ID                string     `xml:"id"`
+	Category          string     `xml:"category,omitempty"` // v2 only
+	URI               string     `xml:"uri"`
+	Description       string     `xml:"description"`
+	Versions          CEVersions `xml:"versions"`
+	//lint:ignore SA5008 Static checker false positive
+	Origin *AppManifest `json:"-" xml:"-"`
+}
+
+type CEVersions struct {
+	XMLName xml.Name    `xml:"versions"`
+	Version []CEVersion `xml:"version"`
+}
+
+type CEVersion struct {
+	XMLName                     xml.Name `xml:"version"`
+	FlowVersion                 string   `xml:"flow_version,attr,omitempty"`
+	ToolsMinVersion             string   `xml:"tools_min_version,attr,omitempty"`               // v2
+	ToolsMaxVersion             string   `xml:"tools_max_version,attr,omitempty"`               // v1
+	ReqCapabilitiesPerVersion   string   `xml:"req_capabilities_per_version,attr,omitempty"`    // v1: space-delimited
+	ReqCapabilitiesPerVersionV2 string   `xml:"req_capabilities_per_version_v2,attr,omitempty"` // v2: bracketed syntax
+	Num                         string   `xml:"num"`
+	Commit                      string   `xml:"commit"`
+}
+
 func ReadSuperManifest(xmlData []byte) (*SuperManifest, error) {
 	var superManifest SuperManifest
 	err := xml.Unmarshal(xmlData, &superManifest)
@@ -646,4 +687,41 @@ func (sm *SuperManifest) AddSuperManifestFromURL(urlStr string) error {
 		sm.AddSuperManifest(otherConcrete)
 	}
 	return nil
+}
+
+// IsV2 checks if this is a v2 format manifest
+func (apps *Apps) IsV2() bool {
+	return apps.Version == "2.0"
+}
+
+func ReadAppsManifest(data []byte) (*Apps, error) {
+	var apps Apps
+	if err := xml.Unmarshal(data, &apps); err != nil {
+		return nil, err
+	}
+	return &apps, nil
+}
+
+// GetKeywords returns the keywords as a slice, parsed from comma-delimited string
+func (a *App) GetKeywords() []string {
+	if a.Keywords == "" {
+		return []string{}
+	}
+
+	keywords := strings.Split(a.Keywords, ",")
+	result := make([]string, 0, len(keywords))
+	for _, kw := range keywords {
+		if trimmed := strings.TrimSpace(kw); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// GetToolsVersion returns the appropriate tools version string (min for v2, max for v1)
+func (v *CEVersion) GetToolsVersion() (version string, isMin bool) {
+	if v.ToolsMinVersion != "" {
+		return v.ToolsMinVersion, true
+	}
+	return v.ToolsMaxVersion, false
 }
