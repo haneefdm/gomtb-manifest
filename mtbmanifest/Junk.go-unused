@@ -1,0 +1,54 @@
+package XXXXX
+
+import (
+	"encoding/xml"
+	"fmt"
+)
+
+// Depender is the Root Element
+type Depender struct {
+	XMLName xml.Name `xml:"depender"` // Root must identify itself
+	ID      string   `xml:"id"`
+
+	// PATH TAGS + POINTERS:
+	// 1. "versions>version" skips the wrapper tag.
+	// 2. []*Ptr allows in-place modification and is efficient.
+	Versions []*DependerVersion `xml:"versions>version"`
+
+	// ROOT ATTRIBUTES:
+	// Catch attributes on the <depender> tag itself (e.g. schemaVersion="2.0")
+	LostAttrs []xml.Attr `xml:",any,attr"`
+}
+
+type DependerVersion struct {
+	// KNOWN FIELDS
+	Commit    string      `xml:"commit"`
+	Dependees []*Dependee `xml:"dependees>dependee"`
+
+	// DISCOVERY MODE (Tags):
+	// Captures children like <deprecated>true</deprecated>
+	Surprises []AnyTag `xml:",any"`
+
+	// DISCOVERY MODE (Attributes):
+	// Captures attributes like <version status="beta">
+	LostAttrs []xml.Attr `xml:",any,attr"`
+}
+
+type Dependee struct {
+	ID     string `xml:"id"`
+	Commit string `xml:"commit"`
+
+	// You can add discovery fields here too if needed
+	LostAttrs []xml.Attr `xml:",any,attr"`
+}
+
+// AnyTag captures the Name and Inner Content of unknown elements
+type AnyTag struct {
+	XMLName xml.Name
+	Body    string `xml:",innerxml"`
+}
+
+// Helper to print surprises
+func (t AnyTag) String() string {
+	return fmt.Sprintf("<%s>: %s", t.XMLName.Local, t.Body)
+}

@@ -282,7 +282,7 @@ type FetchUrlWithCb struct {
 // If a Callback is provided, it is called for each URL when fetched and it will be
 // in its own goroutine. So, use callbacks with proper synchronization if needed.
 // The order of the callbacks can be different from the order of the input URLs.
-func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
+func (f *ManifestFetcher) FetchAllWithCb(urls []*FetchUrlWithCb) map[string]any {
 	results := map[string]any{}
 	var mu sync.Mutex
 	var wgFetches sync.WaitGroup
@@ -290,7 +290,7 @@ func (f *ManifestFetcher) FetchAllWithCb(urls []FetchUrlWithCb) map[string]any {
 
 	for ix, item := range urls {
 		wgFetches.Add(1)
-		go func(index int, item FetchUrlWithCb) {
+		go func(index int, item *FetchUrlWithCb) {
 			f.limiter <- struct{}{}        // Acquire
 			defer func() { <-f.limiter }() // Release
 			defer wgFetches.Done()

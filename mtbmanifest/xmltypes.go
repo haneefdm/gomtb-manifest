@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -80,14 +81,14 @@ type SuperManifestIF interface {
 	// GetMiddleware retrieves a specific middleware item by its ID
 	GetMiddleware(middlewareID string) (*MiddlewareItem, bool)
 
-	// GetBSPDependenciesManifest fetches and caches the BSP dependencies manifest from the given URL
-	GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error)
+	// GetDependencies fetches and caches the BSP dependencies manifest from the given URL
+	GetDependencies(urlStr string) *Dependencies
 
 	// GetBSPCapabilitiesManifest fetches and caches the BSP capabilities manifest from the given URL
-	GetBSPCapabilitiesManifest(urlStr string) (*BSPCapabilitiesManifest, error)
+	GetBSPCapabilitiesManifest(urlStr string) *BSPCapabilitiesManifest
 
-	// GetBSPDependencies retrieves the BSP dependencies for a specific BSP ID from the given URL
-	GetBSPDependencies(urlStr string, bspId string) (*BSPDepender, error)
+	// GetDependencies retrieves the BSP dependencies for a specific BSP ID from the given URL
+	GetDependenciesByID(urlStr string, bspId string) *Depender
 
 	// AddSuperManifestFromURL fetches a super manifest from a URL and merges it into this one
 	AddSuperManifestFromURL(urlStr string) error
@@ -112,8 +113,12 @@ type SuperManifest struct {
 	middlewareMap map[string]*MiddlewareItem
 
 	// Following stores downloaded BSP manifests to avoid re-fetching across multiple boards and manifests
-	bspDependenciesMap map[string]*BSPDependenciesManifest
 	bspCapabilitiesMap map[string]*BSPCapabilitiesManifest
+	dependenciesMap    map[string]*Dependencies
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 // NewSuperManifest creates an empty SuperManifest ready to be populated.
@@ -122,8 +127,8 @@ func NewSuperManifest() SuperManifestIF {
 		BoardManifestList:      &BoardManifestList{},
 		AppManifestList:        &AppManifestList{},
 		MiddlewareManifestList: &MiddlewareManifestList{},
-		bspDependenciesMap:     make(map[string]*BSPDependenciesManifest),
 		bspCapabilitiesMap:     make(map[string]*BSPCapabilitiesManifest),
+		dependenciesMap:        make(map[string]*Dependencies),
 	}
 	ret.clearMaps()
 	return ret
@@ -138,7 +143,7 @@ func NewSuperManifestFromURL(urlStr string) (SuperManifestIF, error) {
 		urlStr = SuperManifestURL
 	}
 
-	logger.Infof("Fetching super manifest...%s\n", urlStr)
+	// logger.Infof("Fetching super manifest...%s\n", urlStr)
 	superData, err := urlFetcher.Cache().Get(urlStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch super manifest %s: %v", urlStr, err)
@@ -149,33 +154,44 @@ func NewSuperManifestFromURL(urlStr string) (SuperManifestIF, error) {
 	}
 	superManifest.SourceUrls = append(superManifest.SourceUrls, urlStr)
 	superManifest.clearMaps()
-	logger.Infof("Fetched super manifest with %d board manifests\n", len(superManifest.BoardManifestList.BoardManifest))
 
-	urls := []FetchUrlWithCb{}
+	urls := []*FetchUrlWithCb{}
 	var mu sync.Mutex
+	depUrls := make(map[string]interface{})
+	capUrls := make(map[string]interface{})
 	for ix, mManifest := range superManifest.BoardManifestList.BoardManifest {
-		item := FetchUrlWithCb{
+		item := &FetchUrlWithCb{
 			Url: mManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
-				logger.Infof("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				// logger.Infof("Board: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
 				boards, err := UnmarshalManifest(data, err, ReadBoardManifest)
 				if err != nil {
 					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
 				} else {
 					mu.Lock()
-					superManifest.BoardManifestList.BoardManifest[index].Boards = boards
+					bm := superManifest.BoardManifestList.BoardManifest[index]
+					bm.Boards = boards
+					for _, board := range bm.Boards.Boards {
+						board.Origin = bm
+					}
 					mu.Unlock()
 				}
 			},
+		}
+		if mManifest.CapabilityURL != "" {
+			capUrls[mManifest.CapabilityURL] = mManifest
+		}
+		if mManifest.DependencyURL != "" {
+			depUrls[mManifest.DependencyURL] = mManifest
 		}
 		urls = append(urls, item)
 	}
 
 	for ix, aManifest := range superManifest.AppManifestList.AppManifest {
-		item := FetchUrlWithCb{
+		item := &FetchUrlWithCb{
 			Url: aManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
-				logger.Infof("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				// logger.Infof("App: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
 				app, err := UnmarshalManifest(data, err, ReadAppsManifest)
 				if err != nil {
 					logger.Errorf("Error fetching %s: %v\n", urlStr, err)
@@ -189,16 +205,59 @@ func NewSuperManifestFromURL(urlStr string) (SuperManifestIF, error) {
 		urls = append(urls, item)
 	}
 	for ix, mManifest := range superManifest.MiddlewareManifestList.MiddlewareManifest {
-		item := FetchUrlWithCb{
+		item := &FetchUrlWithCb{
 			Url: mManifest.URI, Index: ix,
 			Callback: func(urlStr string, data []byte, err error, index int) {
-				logger.Infof("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
+				// logger.Infof("Middleware: %s: len=%d, err=%v, index=%d\n", urlStr, len(data), err, index)
 				middleware, err := UnmarshalManifest(data, err, ReadMiddlewareManifest)
 				if err != nil {
 					logger.Errorf("Error fetching file %s: %v\n", urlStr, err)
 				} else {
 					mu.Lock()
-					superManifest.MiddlewareManifestList.MiddlewareManifest[index].Middlewares = middleware
+					mwM := superManifest.MiddlewareManifestList.MiddlewareManifest[index]
+					mwM.Middlewares = middleware
+					for _, mw := range mwM.Middlewares.Middlewares {
+						mw.Origin = mwM
+					}
+					mu.Unlock()
+				}
+			},
+		}
+		if mManifest.DependencyURL != "" {
+			depUrls[mManifest.DependencyURL] = mManifest
+		}
+		urls = append(urls, item)
+	}
+	depMap := make(map[string]*Dependencies)
+	for depUrl := range depUrls {
+		item := &FetchUrlWithCb{
+			Url: depUrl,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				// logger.Infof("Dependencies: %s: len=%d, err=%v\n", urlStr, len(data), err)
+				deps, err := UnmarshalManifest(data, err, ReadDependenciesManifest)
+				if err != nil {
+					logger.Errorf("Error fetching dependencies %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					depMap[urlStr] = deps
+					mu.Unlock()
+				}
+			},
+		}
+		urls = append(urls, item)
+	}
+	capMap := make(map[string]*BSPCapabilitiesManifest)
+	for capUrl := range capUrls {
+		item := &FetchUrlWithCb{
+			Url: capUrl,
+			Callback: func(urlStr string, data []byte, err error, index int) {
+				// logger.Infof("Capabilities: %s: len=%d, err=%v\n", urlStr, len(data), err)
+				caps, err := UnmarshalManifest(data, err, ReadBSPCapabilitiesManifest)
+				if err != nil {
+					logger.Errorf("Error fetching capabilities %s: %v\n", urlStr, err)
+				} else {
+					mu.Lock()
+					capMap[urlStr] = caps
 					mu.Unlock()
 				}
 			},
@@ -207,6 +266,49 @@ func NewSuperManifestFromURL(urlStr string) (SuperManifestIF, error) {
 	}
 
 	urlFetcher.FetchAllWithCb(urls)
+	superManifest.dependenciesMap = depMap
+	superManifest.bspCapabilitiesMap = capMap
+
+	for _, dep := range depMap {
+		_ = dep.CreateMaps()
+	}
+	for _, cap := range capMap {
+		_ = cap
+		// cap.CreateMaps()
+	}
+
+	for depUrl, manifest := range depUrls {
+		if boardM, ok := manifest.(*BoardManifest); ok {
+			for _, board := range boardM.Boards.Boards {
+				if (board.Origin != manifest) || (board.Origin.DependencyURL != depUrl) {
+					fmt.Printf("Warning: Board %s origin manifest mismatch for dependency URL %s\n", board.ID, depUrl)
+				}
+				board.Dependencies = depMap[depUrl].CreateMaps()[board.ID]
+			}
+		} else if mwM, ok := manifest.(*MiddlewareManifest); ok {
+			for _, mw := range mwM.Middlewares.Middlewares {
+				if (mw.Origin != manifest) || (mw.Origin.DependencyURL != depUrl) {
+					fmt.Printf("Warning: Middleware %s origin manifest mismatch for dependency URL %s\n", mw.ID, depUrl)
+				}
+				mw.Dependencies = depMap[depUrl].CreateMaps()[mw.ID]
+			}
+		}
+	}
+	for capUrl, manifest := range capUrls {
+		if boardM, ok := manifest.(*BoardManifest); ok {
+			for _, board := range boardM.Boards.Boards {
+				if (board.Origin != manifest) || (board.Origin.CapabilityURL != capUrl) {
+					fmt.Printf("Warning: Board %s origin manifest mismatch for capability URL %s\n", board.ID, capUrl)
+				}
+				board.Capabilities = capMap[capUrl]
+			}
+		}
+	}
+
+	logger.Infof("Fetched super manifest with %d boards, %d apps, %d middleware\n",
+		len(superManifest.BoardManifestList.BoardManifest),
+		len(superManifest.AppManifestList.AppManifest),
+		len(superManifest.MiddlewareManifestList.MiddlewareManifest))
 	return superManifest, err
 }
 
@@ -220,6 +322,10 @@ func (sm *SuperManifest) clearMaps() {
 type BoardManifestList struct {
 	XMLName       xml.Name         `xml:"board-manifest-list"`
 	BoardManifest []*BoardManifest `xml:"board-manifest"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type BoardManifest struct {
@@ -228,22 +334,37 @@ type BoardManifest struct {
 	CapabilityURL string   `xml:"capability-url,attr,omitempty"`
 	URI           string   `xml:"uri"`
 	Boards        *Boards
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type AppManifestList struct {
 	XMLName     xml.Name       `xml:"app-manifest-list"`
 	AppManifest []*AppManifest `xml:"app-manifest"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type AppManifest struct {
 	XMLName xml.Name `xml:"app-manifest"`
 	URI     string   `xml:"uri"`
 	Apps    *Apps
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type MiddlewareManifestList struct {
 	XMLName            xml.Name              `xml:"middleware-manifest-list"`
 	MiddlewareManifest []*MiddlewareManifest `xml:"middleware-manifest"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type MiddlewareManifest struct {
@@ -251,11 +372,19 @@ type MiddlewareManifest struct {
 	DependencyURL string   `xml:"dependency-url,attr,omitempty"`
 	URI           string   `xml:"uri"`
 	Middlewares   *Middleware
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type Boards struct {
 	XMLName xml.Name `xml:"boards"`
-	Boards  []Board  `xml:"board"`
+	Boards  []*Board `xml:"board"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type Board struct {
@@ -273,20 +402,32 @@ type Board struct {
 	DefaultLocation  string         `xml:"default_location,attr,omitempty"`
 
 	//lint:ignore SA5008 Static checker false positive
-	Origin          *BoardManifest `json:"-" xml:"-"`
-	BSPDependencies *BSPDepender
-	BSPCapabilities *BSPCapabilitiesManifest
+	Origin *BoardManifest `json:"-" xml:"-"`
+	//lint:ignore SA5008 Static checker false positive
+	Dependencies *Depender                `xml:"-"`
+	Capabilities *BSPCapabilitiesManifest `xml:"-"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type Chips struct {
 	XMLName xml.Name `xml:"chips"`
 	MCU     []string `xml:"mcu"`
 	Radio   []string `xml:"radio,omitempty"`
-}
 
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
+}
 type BoardVersions struct {
 	XMLName  xml.Name        `xml:"versions"`
 	Versions []*BoardVersion `xml:"version"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type BoardVersion struct {
@@ -295,12 +436,20 @@ type BoardVersion struct {
 	ProvCapabilitiesPerVersion string   `xml:"prov_capabilities_per_version,attr"`
 	Num                        string   `xml:"num"`
 	Commit                     string   `xml:"commit"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 // Middleware is the root element
 type Middleware struct {
 	XMLName     xml.Name          `xml:"middleware"`
 	Middlewares []*MiddlewareItem `xml:"middleware"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 // MiddlewareItem represents a single middleware entry
@@ -318,12 +467,22 @@ type MiddlewareItem struct {
 	Versions          *MWVersions `xml:"versions"`
 	//lint:ignore SA5008 Static checker false positive
 	Origin *MiddlewareManifest `json:"-" xml:"-"`
+	//lint:ignore SA5008 Static checker false positive
+	Dependencies *Depender `xml:"-"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 // Versions contains a list of version entries
 type MWVersions struct {
 	XMLName xml.Name     `xml:"versions"`
 	Version []*MWVersion `xml:"version"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 // Version represents a single version entry
@@ -334,46 +493,10 @@ type MWVersion struct {
 	Num             string   `xml:"num"`
 	Commit          string   `xml:"commit"`
 	Desc            string   `xml:"desc"`
-}
 
-// Dependencies is the root element
-type Dependencies struct {
-	XMLName  xml.Name    `xml:"dependencies"`
-	Version  string      `xml:"version,attr"`
-	Depender []*Depender `xml:"depender"`
-}
-
-// Depender represents a BSP that has dependencies
-type Depender struct {
-	XMLName  xml.Name            `xml:"depender"`
-	ID       string              `xml:"id"`
-	Versions *DependencyVersions `xml:"versions"`
-}
-
-// DependencyVersions contains version-specific dependency information
-type DependencyVersions struct {
-	XMLName xml.Name             `xml:"versions"`
-	Version []*DependencyVersion `xml:"version"`
-}
-
-// DependencyVersion represents dependencies for a specific version
-type DependencyVersion struct {
-	XMLName   xml.Name   `xml:"version"`
-	Commit    string     `xml:"commit"`
-	Dependees *Dependees `xml:"dependees"`
-}
-
-// Dependees is a container for all the dependencies
-type Dependees struct {
-	XMLName  xml.Name    `xml:"dependees"`
-	Dependee []*Dependee `xml:"dependee"`
-}
-
-// Dependee represents a single dependency (library/middleware)
-type Dependee struct {
-	XMLName xml.Name `xml:"dependee"`
-	ID      string   `xml:"id"`
-	Commit  string   `xml:"commit"`
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 // CapabilitiesManifest is the root structure
@@ -396,7 +519,11 @@ type Capability struct {
 type Apps struct {
 	XMLName xml.Name `xml:"apps"`
 	Version string   `xml:"version,attr,omitempty"` // Only in v2 (fv2): "2.0"
-	App     []App    `xml:"app"`
+	App     []*App   `xml:"app"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type App struct {
@@ -412,11 +539,19 @@ type App struct {
 	Versions          CEVersions `xml:"versions"`
 	//lint:ignore SA5008 Static checker false positive
 	Origin *AppManifest `json:"-" xml:"-"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type CEVersions struct {
-	XMLName xml.Name    `xml:"versions"`
-	Version []CEVersion `xml:"version"`
+	XMLName xml.Name     `xml:"versions"`
+	Version []*CEVersion `xml:"version"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 type CEVersion struct {
@@ -428,11 +563,15 @@ type CEVersion struct {
 	ReqCapabilitiesPerVersionV2 string   `xml:"req_capabilities_per_version_v2,attr,omitempty"` // v2: bracketed syntax
 	Num                         string   `xml:"num"`
 	Commit                      string   `xml:"commit"`
+
+	// Capture unknown tags and attributes
+	Surprises []AnyTag   `xml:",any"`
+	LostAttrs []xml.Attr `xml:",any,attr"`
 }
 
 func ReadSuperManifest(xmlData []byte) (*SuperManifest, error) {
 	var superManifest SuperManifest
-	err := xml.Unmarshal(xmlData, &superManifest)
+	err := UnmarshalXMLWithVerification(xmlData, &superManifest)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +580,7 @@ func ReadSuperManifest(xmlData []byte) (*SuperManifest, error) {
 
 func ReadBoardManifest(xmlData []byte) (*Boards, error) {
 	var boards = Boards{}
-	err := xml.Unmarshal(xmlData, &boards)
+	err := UnmarshalXMLWithVerification(xmlData, &boards)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +589,7 @@ func ReadBoardManifest(xmlData []byte) (*Boards, error) {
 
 func ReadMiddlewareManifest(xmlData []byte) (*Middleware, error) {
 	var middleware = Middleware{}
-	err := xml.Unmarshal(xmlData, &middleware)
+	err := UnmarshalXMLWithVerification(xmlData, &middleware)
 	if err != nil {
 		return nil, err
 	}
@@ -476,7 +615,7 @@ func ReadCapabilitiesManifest(jsonData []byte) (*CapabilitiesManifest, error) {
 // and ensuring compatible versions are used together!
 func ReadDependenciesManifest(xmlData []byte) (*Dependencies, error) {
 	var deps = Dependencies{}
-	err := xml.Unmarshal(xmlData, &deps)
+	err := UnmarshalXMLWithVerification(xmlData, &deps)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +631,7 @@ func (manifest *SuperManifest) GetBoardsMap() *map[string]*Board {
 		if bm.Boards != nil {
 			for _, board := range bm.Boards.Boards {
 				board.Origin = bm
-				manifest.boardsMap[board.ID] = &board
+				manifest.boardsMap[board.ID] = board
 			}
 		}
 	}
@@ -527,7 +666,7 @@ func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
 		if am.Apps != nil {
 			for _, app := range am.Apps.App {
 				app.Origin = am
-				manifest.appMap[app.ID] = &app
+				manifest.appMap[app.ID] = app
 			}
 		}
 	}
@@ -588,60 +727,31 @@ func (manifest *SuperManifest) GetMiddleware(middlewareID string) (*MiddlewareIt
 	return item, exists
 }
 
-func (sm *SuperManifest) GetBSPDependenciesManifest(urlStr string) (*BSPDependenciesManifest, error) {
+// GetDependencies fetches and caches the BSP/Middleware dependencies manifest from the given URL
+func (sm *SuperManifest) GetDependencies(urlStr string) *Dependencies {
 	if (urlStr == "") || (urlStr == "N/A") {
-		return nil, nil
+		return nil
 	}
-	ret := sm.bspDependenciesMap[urlStr]
-	if ret != nil {
-		return ret, nil
-	}
-	if sm.bspDependenciesMap == nil {
-		sm.bspDependenciesMap = make(map[string]*BSPDependenciesManifest)
-	}
-	mC := NewManifestDefaultCache()
-	data, err := mC.Get(urlStr)
-	if err != nil {
-		return nil, err
-	}
-	depManifest, err := ReadBSPDependenciesManifest(data)
-	if err != nil {
-		return nil, err
-	}
-	sm.bspDependenciesMap[urlStr] = depManifest
-	return depManifest, nil
+	ret := sm.dependenciesMap[urlStr]
+	return ret
 }
 
-func (sm *SuperManifest) GetBSPCapabilitiesManifest(urlStr string) (*BSPCapabilitiesManifest, error) {
+func (sm *SuperManifest) GetBSPCapabilitiesManifest(urlStr string) *BSPCapabilitiesManifest {
 	ret := sm.bspCapabilitiesMap[urlStr]
-	if ret != nil {
-		return ret, nil
-	}
-	if sm.bspCapabilitiesMap == nil {
-		sm.bspCapabilitiesMap = make(map[string]*BSPCapabilitiesManifest)
-	}
-	mC := NewManifestDefaultCache()
-	data, err := mC.Get(urlStr)
-	if err != nil {
-		return nil, err
-	}
-	depManifest, err := ReadBSPCapabilitiesManifest(data)
-	if err != nil {
-		return nil, err
-	}
-	sm.bspCapabilitiesMap[urlStr] = depManifest
-	return depManifest, nil
+	return ret
 }
 
-func (sm *SuperManifest) GetBSPDependencies(urlStr string, bspId string) (*BSPDepender, error) {
-	if (bspId == "") || (bspId == "N/A" || (urlStr == "") || (urlStr == "N/A")) {
-		return nil, nil
+// GetDependenciesByID retrieves the BSP dependencies for a specific BSP ID from the given URL
+// Returns nil if the URL or ID is empty or "N/A"
+func (sm *SuperManifest) GetDependenciesByID(urlStr string, Id string) *Depender {
+	if (Id == "") || (Id == "N/A" || (urlStr == "") || (urlStr == "N/A")) {
+		return nil
 	}
-	depManifest, err := sm.GetBSPDependenciesManifest(urlStr)
-	if err != nil {
-		return nil, err
+	depManifest := sm.GetDependencies(urlStr)
+	if depManifest != nil {
+		return nil
 	}
-	return depManifest.GetBSP(bspId), nil
+	return depManifest.GetBSP(Id)
 }
 
 func UnmarshalManifest[T any](data []byte, err error, parseFunc func([]byte) (*T, error)) (*T, error) {
@@ -667,12 +777,24 @@ func (sm *SuperManifest) AddSuperManifest(other *SuperManifest) {
 	sm.AppManifestList.AppManifest = append(sm.AppManifestList.AppManifest, other.AppManifestList.AppManifest...)
 	// Merge Middleware Manifests
 	sm.MiddlewareManifestList.MiddlewareManifest = append(sm.MiddlewareManifestList.MiddlewareManifest, other.MiddlewareManifestList.MiddlewareManifest...)
-	for k, v := range other.bspDependenciesMap {
-		sm.bspDependenciesMap[k] = v
+
+	// If we have duplicate dependency or capability URLs, log a warning. It is possible
+	// that we will have dangling references in board/middleware manifests, but that is up to the user
+	// to resolve. It should not cause a crash. If this is a problem, we can enhance this to track
+	// which manifest the URL came from and only warn if the same URL has different content.
+	for k, v := range other.dependenciesMap {
+		if _, exists := sm.dependenciesMap[k]; exists {
+			logger.Warningf("Merging super manifests with duplicate dependency URL: %s\n", k)
+		}
+		sm.dependenciesMap[k] = v
 	}
 	for k, v := range other.bspCapabilitiesMap {
+		if _, exists := sm.bspCapabilitiesMap[k]; exists {
+			logger.Warningf("Merging super manifests with duplicate BSP capabilities URL: %s\n", k)
+		}
 		sm.bspCapabilitiesMap[k] = v
 	}
+
 	// Following maps will be rebuilt on demand. So, clear them instead of merging
 	sm.clearMaps()
 }
@@ -696,7 +818,7 @@ func (apps *Apps) IsV2() bool {
 
 func ReadAppsManifest(data []byte) (*Apps, error) {
 	var apps Apps
-	if err := xml.Unmarshal(data, &apps); err != nil {
+	if err := UnmarshalXMLWithVerification(data, &apps); err != nil {
 		return nil, err
 	}
 	return &apps, nil
@@ -724,4 +846,34 @@ func (v *CEVersion) GetToolsVersion() (version string, isMin bool) {
 		return v.ToolsMinVersion, true
 	}
 	return v.ToolsMaxVersion, false
+}
+
+// ////////////////////////////////////////////////////////////////////////
+// XML Unmarshal verification
+// ////////////////////////////////////////////////////////////////////////
+var doVerifyXMLUnmarshal = false
+
+// EnableXMLUnmarshalVerification enables or disables verification of XML unmarshaling
+func EnableXMLUnmarshalVerification(enable bool) {
+	if enable {
+		logger.Infof("XML Unmarshal Verification Enabled\n")
+	}
+	doVerifyXMLUnmarshal = enable
+}
+
+func UnmarshalXMLWithVerification[T any](data []byte, obj *T) error {
+	if err := xml.Unmarshal(data, obj); err != nil {
+		return err
+	}
+
+	if doVerifyXMLUnmarshal {
+		logger.Infof("End Unmarshal of Type %s, Begin Verification\n", reflect.TypeOf(*obj).Name())
+		badPaths := FindDeepSurprisesInStruct(*obj)
+		if len(badPaths) > 0 {
+			for _, path := range badPaths {
+				logger.Warningf("⚠️  XML Unmarshal Surprise: %s\n", path)
+			}
+		}
+	}
+	return nil
 }

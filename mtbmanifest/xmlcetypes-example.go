@@ -1,7 +1,6 @@
 package mtbmanifest
 
 import (
-	"encoding/xml"
 	"fmt"
 	"os"
 )
@@ -28,7 +27,7 @@ func CEExampleMain() {
 </apps>`
 
 	var apps1 Apps
-	if err := xml.Unmarshal([]byte(v1Data), &apps1); err != nil {
+	if err := UnmarshalXMLWithVerification([]byte(v1Data), &apps1); err != nil {
 		fmt.Printf("Error parsing v1: %v\n", err)
 		return
 	}
@@ -63,7 +62,7 @@ func CEExampleMain() {
 </apps>`
 
 	var apps2 Apps
-	if err := xml.Unmarshal([]byte(v2Data), &apps2); err != nil {
+	if err := UnmarshalXMLWithVerification([]byte(v2Data), &apps2); err != nil {
 		fmt.Printf("Error parsing v2: %v\n", err)
 		return
 	}
@@ -154,7 +153,6 @@ func CEExampleMain() {
 }
 
 // LoadManifestFromFile demonstrates loading from actual files
-// LoadManifestFromFile demonstrates loading from actual files
 func LoadManifestFromFile(filename string) (*Apps, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -162,7 +160,7 @@ func LoadManifestFromFile(filename string) (*Apps, error) {
 	}
 
 	var apps Apps
-	if err := xml.Unmarshal(data, &apps); err != nil {
+	if err := UnmarshalXMLWithVerification(data, &apps); err != nil {
 		return nil, fmt.Errorf("parse XML: %w", err)
 	}
 
@@ -170,8 +168,8 @@ func LoadManifestFromFile(filename string) (*Apps, error) {
 }
 
 // FindCompatibleApps returns apps that match the given capabilities
-func FindCompatibleApps(apps *Apps, availableCapabilities map[string]bool) []App {
-	compatible := make([]App, 0)
+func FindCompatibleApps(apps *Apps, availableCapabilities map[string]bool) []*App {
+	compatible := make([]*App, 0)
 
 	for _, app := range apps.App {
 		caps := app.GetCapabilities()
@@ -184,8 +182,8 @@ func FindCompatibleApps(apps *Apps, availableCapabilities map[string]bool) []App
 }
 
 // Example of finding compatible versions for a specific app
-func FindCompatibleVersions(app *App, availableCapabilities map[string]bool) []CEVersion {
-	compatible := make([]CEVersion, 0)
+func FindCompatibleVersions(app *App, availableCapabilities map[string]bool) []*CEVersion {
+	compatible := make([]*CEVersion, 0)
 
 	for _, version := range app.Versions.Version {
 		versionCaps := version.GetCapabilities()

@@ -1,7 +1,6 @@
 package mtbmanifest
 
 import (
-	"encoding/xml"
 	"testing"
 )
 
@@ -186,7 +185,7 @@ func TestAppStructParsing(t *testing.T) {
 </apps>`
 
 	var apps Apps
-	if err := xml.Unmarshal([]byte(v1XML), &apps); err != nil {
+	if err := UnmarshalXMLWithVerification([]byte(v1XML), &apps); err != nil {
 		t.Fatalf("failed to parse XML: %v", err)
 	}
 
@@ -226,7 +225,7 @@ func TestV2AppParsing(t *testing.T) {
 </apps>`
 
 	var apps Apps
-	if err := xml.Unmarshal([]byte(v2XML), &apps); err != nil {
+	if err := UnmarshalXMLWithVerification([]byte(v2XML), &apps); err != nil {
 		t.Fatalf("failed to parse XML: %v", err)
 	}
 

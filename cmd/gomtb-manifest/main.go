@@ -89,6 +89,8 @@ func doMain() {
 		return
 	}
 
+	mtbmanifest.EnableXMLUnmarshalVerification(true)
+
 	timer := NewTimer()
 	// For demonstration, we will just ingest the manifest and print the number of boards
 	superManifest, err := mtbmanifest.NewSuperManifestFromURL("")
@@ -102,12 +104,10 @@ func doMain() {
 	name := "KIT_PSE84_EVAL_EPC2"
 	board := (*superManifest.GetBoardsMap())[name]
 	if board != nil {
-		board.BSPDependencies, _ = superManifest.GetBSPDependencies(board.Origin.DependencyURL, board.ID)
 		logger.Infof("Found board %s:\n", name)
 		jsonData, _ := json.MarshalIndent(board, "", "  ")
 		_ = os.WriteFile("tmp/board.json", jsonData, 0644)
-		board.BSPCapabilities, _ = superManifest.GetBSPCapabilitiesManifest(board.Origin.CapabilityURL)
-		jsonData, _ = json.MarshalIndent(board.BSPCapabilities, "", "  ")
+		jsonData, _ = json.MarshalIndent(board.Capabilities, "", "  ")
 		_ = os.WriteFile("tmp/capabilities.json", jsonData, 0644)
 	} else {
 		logger.Errorf("Error: Board %s not found\n", name)
