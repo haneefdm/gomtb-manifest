@@ -211,3 +211,50 @@ func FindMiddlewareForBoard(sm SuperManifestIF, board *Board) []*MiddlewareItem 
 
 	return result
 }
+
+func FindCodeExamplesForBoard(sm SuperManifestIF, board *Board) []*App {
+	result := make([]*App, 0)
+	appMap := sm.GetAppsMap()
+	boardsCapabilities := strings.Fields(board.ProvCapabilities)
+	// Check if board's BSP capabilities satisfy middleware requirements
+	boardCaps := make(map[string]bool)
+	for _, cap := range boardsCapabilities {
+		boardCaps[cap] = true
+	}
+
+	for _, app := range *appMap {
+		// Check if CE has capability requirements
+		capReqStr := app.ReqCapabilitiesV2
+		if capReqStr == "" && app.ReqCapabilities != "" {
+			capReqStr = app.ReqCapabilities
+		}
+		capReq := ParseCapabilities(capReqStr)
+		if len(capReq.Groups) == 0 {
+			// No requirements, check version specific requirements
+			versionCapReqStr := ""
+			for _, version := range app.Versions.Version {
+				versionCapReqStr = version.ReqCapabilitiesPerVersionV2
+				if versionCapReqStr == "" && version.ReqCapabilitiesPerVersion != "" {
+					versionCapReqStr = version.ReqCapabilitiesPerVersion
+				}
+				if versionCapReqStr == "" {
+					continue
+				}
+				capReq = ParseCapabilities(versionCapReqStr)
+				if len(capReq.Groups) > 0 && capReq.Matches(boardCaps) {
+					// Stop looking in versions, we found a match
+					result = append(result, app)
+					break
+				}
+				capReq = CapabilityRequirement{} // reset for next version
+			}
+			continue
+		}
+
+		if capReq.Matches(boardCaps) {
+			result = append(result, app)
+		}
+	}
+
+	return result
+}

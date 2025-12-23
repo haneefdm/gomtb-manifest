@@ -531,7 +531,7 @@ type App struct {
 	Keywords          string     `xml:"keywords,attr,omitempty"`            // v2 only: comma-delimited
 	ReqCapabilities   string     `xml:"req_capabilities,attr,omitempty"`    // v1: space-delimited string
 	ReqCapabilitiesV2 string     `xml:"req_capabilities_v2,attr,omitempty"` // v2: bracketed syntax
-	Name              string     `xml:"n"`
+	Name              string     `xml:"name"`
 	ID                string     `xml:"id"`
 	Category          string     `xml:"category,omitempty"` // v2 only
 	URI               string     `xml:"uri"`
@@ -623,7 +623,7 @@ func ReadDependenciesManifest(xmlData []byte) (*Dependencies, error) {
 }
 
 func (manifest *SuperManifest) GetBoardsMap() *map[string]*Board {
-	if (manifest.boardsMap != nil) && (len(manifest.boardsMap) > 0) {
+	if len(manifest.boardsMap) > 0 {
 		return &manifest.boardsMap
 	}
 	manifest.boardsMap = make(map[string]*Board)
@@ -658,7 +658,7 @@ func (manifest *SuperManifest) GetBoard(boardID string) (*Board, bool) {
 }
 
 func (manifest *SuperManifest) GetAppsMap() *map[string]*App {
-	if (manifest.appMap != nil) && (len(manifest.appMap) > 0) {
+	if len(manifest.appMap) > 0 {
 		return &manifest.appMap
 	}
 	manifest.appMap = make(map[string]*App)
@@ -693,7 +693,7 @@ func (manifest *SuperManifest) GetApp(appID string) (*App, bool) {
 }
 
 func (manifest *SuperManifest) GetMiddlewareMap() *map[string]*MiddlewareItem {
-	if (manifest.middlewareMap != nil) && (len(manifest.middlewareMap) > 0) {
+	if len(manifest.middlewareMap) > 0 {
 		return &manifest.middlewareMap
 	}
 	manifest.middlewareMap = make(map[string]*MiddlewareItem)
